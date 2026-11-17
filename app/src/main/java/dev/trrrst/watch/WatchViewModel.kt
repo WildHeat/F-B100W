@@ -11,10 +11,9 @@ import androidx.lifecycle.viewModelScope
 import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.ble.Protocol
 import dev.trrrst.watch.data.StepStore
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-
-data class City(val no: Int, val name: String, val tzMin: Int, val dstMin: Int, val rule: Int)
 
 class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private val preferences = app.getSharedPreferences("ui", Context.MODE_PRIVATE)
@@ -52,8 +51,13 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     var dstState by mutableStateOf<Protocol.DstState?>(null)
     var dstSettings by mutableStateOf<Map<Int, Protocol.DstSetting>>(emptyMap())
 
-    var homeCities by mutableStateOf<List<City>>(emptyList())
-    var worldCities by mutableStateOf<List<City>>(emptyList())
+    val homeCities: List<City> get() = repo.homeCities
+    val worldCities: List<City> get() = repo.worldCities
+
+    /** Home city and summer-time mode the app sends on every sync. The watch forgets
+     *  its own on disconnect, so the World tab shows these instead. */
+    fun savedHomeCity(): City? = repo.homeCity()
+    fun savedDstMode(): Int = repo.homeDstMode()
 
     init {
         viewModelScope.launch {
@@ -72,6 +76,24 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             repo.busy.collect { busy = it }
         }
         viewModelScope.launch {
+            // Step data can change from outside this screen (sync on connect, later
+            // background sync), so always reload it from the store.
+            steps.changes.collect {
+                stepsSnapshot = steps.last
+                stepHistory = steps.history()
+            }
+        }
+        viewModelScope.launch {
+            repo.lastSync.collect { r ->
+                when {
+                    r == null -> Unit
+                    !r.ok -> log(r.error ?: SyncMessages.DIDNT_FINISH)
+                    r.steps != null -> log("time synced, steps downloaded")
+                    else -> log("time synced, no new step data")
+                }
+            }
+        }
+        viewModelScope.launch {
             ble.statusLine.collectLatest { status = it }
         }
         viewModelScope.launch {
@@ -82,24 +104,6 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         // Connecting to a found watch is handled by WatchRepository (app-scoped).
-        loadCities()
-    }
-
-    private fun loadCities() {
-        fun parse(name: String): List<City> {
-            val arr = org.json.JSONArray(
-                getApplication<Application>().assets.open(name).bufferedReader().readText()
-            )
-            return (0 until arr.length()).map {
-                val o = arr.getJSONObject(it)
-                City(
-                    o.getInt("no"), o.getString("name"),
-                    (o.getDouble("tz") * 60).toInt(), (o.getDouble("dst") * 60).toInt(), o.getInt("rule")
-                )
-            }
-        }
-        homeCities = parse("cities_ht.json")
-        worldCities = parse("cities_wt.json")
     }
 
     fun log(msg: String) {
@@ -144,9 +148,9 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         repo.exclusive {
             try {
                 block()
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
             } catch (e: Exception) {
+                // Rethrow real cancellation; a watch timeout is a failure to report.
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 android.util.Log.e("Trrrst", "$label failed", e)
                 log("$label failed: ${e.message}")
                 null
@@ -175,16 +179,18 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 dstSettings = mapOf(s0.slot to s0, s1.slot to s1)
                 log("watch state loaded")
             }
-            // Populate steps on connect without consuming the watch's hourly history.
-            fetchSteps(peek = true)
+            // Steps are downloaded by WatchRepository.sync() on each fresh connection.
         }
     }
 
     fun syncTime() {
         viewModelScope.launch {
             op("time sync") {
-                ble.write(Protocol.encodeTime())
-                log("time synced")
+                // The watch only takes the time together with a home city.
+                if (repo.setTime()) {
+                    dstState = Protocol.DstState.decode(ble.read(Protocol.OP_DST_STATE))
+                    log("time synced")
+                } else log(SyncMessages.NO_HOME_CITY)
             }
         }
     }
@@ -194,9 +200,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             op("steps") {
                 val raw = ble.receive(Protocol.CAT_EXERCISE, commit = !peek)
                 if (raw.isNotEmpty()) {
-                    steps.ingest(Protocol.decodeStepRecord(raw))
-                    stepsSnapshot = steps.last
-                    stepHistory = steps.history()
+                    steps.ingest(Protocol.decodeStepRecord(raw))   // screen reloads via steps.changes
                     log(if (peek) "steps read (kept on watch)" else "steps downloaded")
                 } else log("no step data")
             }
@@ -286,21 +290,12 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun saveHomeCity(city: City, dstMode: Int) {   // 0=auto,1=on,2=off
         viewModelScope.launch {
             op("home city") {
-                val st = Protocol.DstState.decode(ble.read(Protocol.OP_DST_STATE))
-                // Read both slots before writing, preserving live world-city parameters.
-                ble.read(Protocol.OP_DST_SETTING) // current home slot, replaced below
-                val world = Protocol.DstSetting.decode(ble.read(Protocol.OP_DST_SETTING))
-                st.homeCity = city.no
-                st.homeAuto = dstMode == 0
-                st.homeDstOn = if (dstMode == 0) st.homeDstOn else dstMode == 1
-                ble.write(st.encode())
-                val home = Protocol.DstSetting(0, city.no, city.tzMin, city.dstMin, city.rule)
-                ble.write(home.encode())
-                ble.write(world.encode())
-                ble.write(Protocol.encodeTime())
-                dstState = Protocol.DstState.decode(ble.read(Protocol.OP_DST_STATE))
-                dstSettings = mapOf(0 to home, 1 to world)
-                log("home city saved")
+                val w = repo.writeHomeCityAndTime(city, dstMode)
+                // Remember it: every sync re-sends it, since the watch forgets it.
+                repo.rememberHomeCity(city, dstMode)
+                dstState = w.state
+                dstSettings = mapOf(0 to w.home, 1 to w.world)
+                log("home city saved, time synced")
             }
         }
     }

@@ -10,5 +10,5 @@ import dev.trrrst.watch.data.StepStore
 class TrrrstApp : Application() {
     val ble by lazy { BleManager(this) }
     val steps by lazy { StepStore(this) }
-    val repository by lazy { WatchRepository(ble, steps) }
+    val repository by lazy { WatchRepository(this, ble, steps) }
 }

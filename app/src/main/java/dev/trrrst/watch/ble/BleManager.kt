@@ -323,8 +323,14 @@ class BleManager(private val context: Context) {
         withTimeout(timeoutMs) {
             while (true) {
                 val v = afQueue.receive()
-                if (v.isNotEmpty() && v[0] == op) return@withTimeout v
-                if (v.isNotEmpty() && v[0] == 0xFF.toByte()) error("watch error 0xFF for 0x${"%02x".format(op)}")
+                if (v.isNotEmpty() && v[0] == op) {
+                    android.util.Log.d("TrrrstBLE", "read ${"%02x".format(op)} -> ${v.toHex()}")
+                    return@withTimeout v
+                }
+                if (v.isNotEmpty() && v[0] == 0xFF.toByte()) {
+                    android.util.Log.d("TrrrstBLE", "read ${"%02x".format(op)} -> error ${v.toHex()}")
+                    error("watch error 0xFF for 0x${"%02x".format(op)}")
+                }
             }
             @Suppress("UNREACHABLE_CODE") error("unreachable")
         }
