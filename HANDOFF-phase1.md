@@ -1,5 +1,7 @@
 # Handoff: Phase 1 (groundwork)
 
+> **Phase 1 is done (2026-11-17).** This file is kept for reference. For the next work, start from [HANDOFF-phase2.md](HANDOFF-phase2.md).
+
 Self-contained brief for a new session. Read this, then [CLAUDE.md](CLAUDE.md) (project rules) and [PLAN.md](PLAN.md) (roadmap, status). You don't need any earlier chat history. The Phase 0 story (crash, reconnect bug, auto-sync bug) is in [HANDOFF-phase0.md](HANDOFF-phase0.md) and PLAN.md's Phase 0 section, for reference only.
 
 Last updated: 2026-11-17.
