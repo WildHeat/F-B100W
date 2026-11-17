@@ -14,7 +14,7 @@ Planned improvements to **TRRRST Watch**, the open-source Android app for the **
 | --- | ------------------------------------------------------ | -------- | ----------------------------------------------------- |
 | 1   | Automatic background sync                              | High     | The watch syncs every day without you opening the app |
 | 2   | Remember your watch                                    | High     | Faster, safer connecting. Needed for #1               |
-| 3   | Keep step history safe (CSV export and Health Connect) | High     | History survives uninstalls and phone changes         |
+| 3   | Keep step history safe (CSV export/import)             | High     | History survives uninstalls and phone changes         |
 | 4   | Better step stats                                      | Medium   | Weekly/monthly totals, streaks, personal bests        |
 | 5   | Home-screen widget                                     | Medium   | See today's steps without opening the app             |
 | 6   | Automatic time zone                                    | Medium   | Watch follows you when you travel                     |
@@ -86,7 +86,7 @@ Every time it connects, the app searches for _any_ device named "CASIO F-B100W".
 
 ### The problem
 
-Step history is saved in one private file inside the app. **If you uninstall the app or change phones, the history is lost.** Steps also can't be seen in any other fitness app.
+Step history is saved in one private file inside the app. **If you uninstall the app or change phones, the history is lost.**
 
 ### What we'll build
 
@@ -100,19 +100,12 @@ Step history is saved in one private file inside the app. **If you uninstall the
 
 - Load a previously exported file back in, e.g. on a new phone.
 
-**c) Health Connect integration**
-
-- Send daily steps and distance to **Health Connect**, Google's on-phone health data hub.
-- Steps then appear in Google Fit and other fitness apps.
-- Works **without internet**. Data stays on the phone.
-- On the Mi 8 (Android 10), Health Connect is installed as a separate app from the Play Store.
-- Optional and off by default. The user grants permission.
+**c) ~~Health Connect integration~~: dropped.** No other fitness app needs the steps, so CSV export/import is the only backup.
 
 ### Done when
 
 - [ ] Export creates a valid CSV with all days
 - [ ] Import restores history without creating duplicate days
-- [ ] With Health Connect on, new steps appear there after each sync
 
 ---
 
@@ -221,4 +214,4 @@ The app is licensed under **AGPL-3.0**:
 
 - We can change it freely for personal use.
 - If the modified app is **shared with anyone**, its source code must be shared too, under the same license.
-- Recommended: offer the improvements back to the original developer as **pull requests**. Everyone benefits, and you keep receiving their updates.
+- This is a personal fork: no pull requests to the original project are planned.

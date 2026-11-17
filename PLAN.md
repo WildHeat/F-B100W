@@ -83,10 +83,10 @@ How to get the trace: MIUI kept it out of logcat. Use `adb shell dumpsys dropbox
 
 Steps:
 - [x] **Confirm the cause** (2026-11-17). Crash report (`adb shell dumpsys dropbox --print data_app_crash`; MIUI kept the trace out of logcat): `SecurityException: Need BLUETOOTH permission` at `BluetoothAdapter.getBluetoothLeScanner()` ← `BleManager.scan(BleManager.kt:51)` ← Connect button. The app crashes **before any Bluetooth traffic**, so it never talked to the watch. The watch's `Err` is just its own connection attempt timing out.
-- [x] **Fix:** added `BLUETOOTH` + `BLUETOOTH_ADMIN` with `maxSdkVersion="30"` to `AndroidManifest.xml` (branch `fix/android10-bluetooth-permissions`, not committed yet). Debug build passes 7/7 tests. `aapt dump permissions` shows both, and no INTERNET.
-- [x] **Uninstalled the GitHub v0.4 release** from the Mi 8 (2026-11-17). The debug build is **not installed yet**. Next steps are in [HANDOFF-phase0.md](HANDOFF-phase0.md).
+- [x] **Fix:** added `BLUETOOTH` + `BLUETOOTH_ADMIN` with `maxSdkVersion="30"` to `AndroidManifest.xml` (branch `fix/android10-bluetooth-permissions`, merged to `master` in PR #1). Debug build passes 7/7 tests. `aapt dump permissions` shows both, and no INTERNET.
+- [x] **Uninstalled the GitHub v0.4 release** from the Mi 8 (2026-11-17) and installed the debug build instead.
 - [x] **First connection worked** (2026-11-17, 15:23). All reads and the user's writes (time, settings, BLE settings, timer, profile, home city, alarms) succeeded.
-- [~] **Bug: second connect fails.** *Fix built, waiting for a re-test.*
+- [x] **Bug: second connect fails.** Fixed and confirmed by the user (reconnect after the watch ends the session works).
   - **Symptom:** after the watch ends a session (`onClientConnectionState status=19`, peer terminated), the next Connect fails with `read-req write failed` / `drsp start failed` / `watch write failed: 09…`. The watch keeps flashing CNCT.
   - **Cause:** `BleManager` never called `gatt.close()` when the *watch* disconnected. Android revived the old client (`clientIf=14`) alongside the new one (`clientIf=13`), both ran MTU/discovery/notify setup on the same link, and they clobbered each other's operations. Each retry added another ghost client.
   - **Fix** (`BleManager.kt`): close the client on `STATE_DISCONNECTED`, call `closeGatt()` + drain queues at the start of every `connect()`, ignore callbacks from stale clients, and fail the in-flight write at once on disconnect.
@@ -97,12 +97,17 @@ Steps:
 - [x] **Date order and Language have no effect on the F-B100W** (confirmed by the user). The app wrote `0x13` bytes 4/5 correctly, but the display never changes. Both rows were removed from Settings. `Basic.encode()` still preserves their bytes.
 - **Auto time sync only sets the watch's side.** At the set time the watch tries to connect, but nothing on the phone answers yet. That's Phase 3 (background sync).
 - **Address observation:** the watch kept `E5:33:8D:36:F8:03` across reconnects, but had `D5:33:BC:22:F8:03` after the user reset it. So it's stable between connections but changes on a watch reset. This feeds into Phase 2.
-- [ ] **Safety net:** catch failures in scan/connect (`SecurityException`, Bluetooth off, adapter missing) so they show a message and disconnect instead of crashing.
-- [ ] **Android 10 permission check:** the startup check only covers `ACCESS_FINE_LOCATION`. Also check that Bluetooth and Location are actually switched on before scanning, with a clear message if not.
-- [ ] **First real connection:** the connect flow (`refreshAll`) only *reads* from the watch and peeks steps without consuming them. Check each read decodes sensibly before trying any write (Sync time, settings).
-- [ ] Then try writes one at a time, starting with **Sync time** (the most basic one).
+- [x] **Safety net:** catch failures in scan/connect (`SecurityException`, Bluetooth off, adapter missing) so they show a message and disconnect instead of crashing. Confirmed by the user (2026-11-17): Bluetooth-off and Location-off messages show, no crash.
+  - `BleManager.scan()` checks first (`ScanCheck`, unit-tested in `ScanCheckTest`), and catches `SecurityException`/`IllegalStateException` around `bluetoothLeScanner`, `startScan` and `stopScan`. Failures set `ConnState.ERROR` with a plain-English status line.
+  - `BleManager.connect()` catches a failing `connectGatt`. `closeGatt()` no longer throws if Bluetooth was just switched off.
+  - `WatchViewModel` wraps the automatic connect (which runs outside `op()`): on failure it logs, resets and shows "Couldn't connect to the watch…".
+  - **Test:** press Connect with Bluetooth off, then with Location off. The app should stay open and say what to do. Then a normal connect should still work.
+- [x] **Android 10 switch check:** before scanning, check that Bluetooth and Location are actually switched on (Location only on Android ≤ 11), with a clear message if not. Confirmed together with the safety net.
+- [x] **First real connection:** all reads decode sensibly (2026-11-17).
+- [x] Writes tried one at a time: Sync time, settings, BLE settings, timer, profile, home city, alarms all confirmed by the user.
+- [x] **Step download (commit):** the home screen's **Download** button (`fetchSteps(peek=false)`) consumes the hourly data on the watch. Confirmed by the user (2026-11-17): downloads as expected, no errors in the log.
 
-Done when: Connect works repeatedly on the Mi 8 with no crash, the watch never shows `Err`, and Sync time + step download work.
+**Phase 0 done (2026-11-17).** Done when: Connect works repeatedly on the Mi 8 with no crash, the watch never shows `Err`, and Sync time + step download work.
 
 ## Phase 1: Groundwork (no visible features)
 
@@ -176,6 +181,6 @@ Done when: Connect works repeatedly on the Mi 8 with no crash, the watch never s
 ## Open questions
 
 1. ~~**Crash cause**~~: confirmed (missing `BLUETOOTH`/`BLUETOOTH_ADMIN`). See Phase 0 crash record.
-2. **Does the protocol work on this watch at all?** Never tested on this unit. Phase 0's first real connection answers it.
-3. **Address stability:** unknown. Phase 2 measures it.
+2. ~~**Does the protocol work on this watch at all?**~~ Yes: reads and writes confirmed (2026-11-17). Step download confirmed too.
+3. **Address stability:** stable across reconnects, but changes after a watch reset (see Phase 0). Phase 2 still needs to handle the change.
 4. **Auto-sync reconnect sequence:** no captures possible. Phase 3 measures it.

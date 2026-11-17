@@ -2,7 +2,7 @@
 
 TRRRST Watch: a FOSS, fully offline Android companion app for the **Casio F-B100W** (module 3589), talking to it over BLE. This repo is a **personal fork** (`origin` = WildHeat/F-B100W) of `taxmeifyoucan/trrrst-watch`, licensed AGPL-3.0. No upstream PRs are planned. Don't shape changes around upstream style.
 
-**Status (2026-11-17):** the app works on the user's Mi 8 (Android 10). The Android 10 crash, the reconnect failure and the auto-sync bug are fixed and confirmed on the real watch. Phase 0 still needs a step-download check and a crash-proofing safety net. **Start from [HANDOFF-phase0.md](HANDOFF-phase0.md).**
+**Status (2026-11-17):** the app works on the user's Mi 8 (Android 10). The Android 10 crash, the reconnect failure and the auto-sync bug are fixed and confirmed on the real watch. Phase 0 is done (safety net and step download confirmed too). Next is Phase 1, only when the user asks. **Start from [HANDOFF-phase0.md](HANDOFF-phase0.md).**
 
 The Mi 8 is reachable over adb at `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe` (not on PATH). Use `-s 52b2b2ca`, since an emulator is often running too. It's the user's personal phone, so only read logs for `dev.trrrst.watch`. **The user installs builds (Android Studio ▶ Run) and commits themselves.** On MIUI, read crash traces with `adb shell dumpsys dropbox --print data_app_crash`, since they don't appear in logcat.
 

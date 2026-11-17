@@ -2,11 +2,14 @@ package dev.trrrst.watch.ble
 
 import android.annotation.SuppressLint
 import android.bluetooth.*
+import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.location.LocationManager
 import android.os.Build
+import androidx.core.location.LocationManagerCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -48,33 +51,81 @@ class BleManager(private val context: Context) {
     private var writeWait: CompletableDeferred<Boolean>? = null
 
     // ------------------------------------------------ scan & connect
+    /** Put the connection into the error state with a plain-English message. */
+    fun fail(message: String) {
+        _state.value = ConnState.ERROR
+        _statusLine.value = message
+    }
+
+    private fun locationOn(): Boolean = runCatching {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        LocationManagerCompat.isLocationEnabled(lm)
+    }.getOrDefault(true)   // unknown: let the scan try rather than block it
+
+    /** stopScan throws if Bluetooth was switched off meanwhile; nothing to stop then. */
+    private fun stopScanQuietly(scanner: BluetoothLeScanner, cb: ScanCallback) {
+        try {
+            scanner.stopScan(cb)
+        } catch (e: Exception) {
+            android.util.Log.w("TrrrstBLE", "stopScan failed", e)
+        }
+    }
+
     fun scan(timeoutMs: Long = 90_000) {
-        val scanner = bluetoothAdapter?.bluetoothLeScanner ?: return
+        val adapter = bluetoothAdapter
+        ScanCheck.problem(
+            hasAdapter = adapter != null,
+            bluetoothOn = runCatching { adapter?.isEnabled == true }.getOrDefault(false),
+            locationOn = locationOn(),
+            sdkInt = Build.VERSION.SDK_INT,
+        )?.let { fail(it); return }
+
+        val scanner = try {
+            adapter?.bluetoothLeScanner
+        } catch (e: SecurityException) {
+            android.util.Log.e("TrrrstBLE", "no permission for scanner", e)
+            fail(ScanCheck.NOT_ALLOWED); return
+        }
+        if (scanner == null) {   // adapter is turning off or on
+            fail(ScanCheck.BLUETOOTH_OFF); return
+        }
         _found.value = null   // StateFlow drops re-emits of the same device: reset first
         _state.value = ConnState.SCANNING
         _statusLine.value = "scanning — press the button on the watch"
         val cb = object : ScanCallback() {
             override fun onScanResult(type: Int, r: ScanResult) {
-                val name = r.device.name ?: r.scanRecord?.deviceName ?: return
+                val name = try {
+                    r.device.name ?: r.scanRecord?.deviceName
+                } catch (e: SecurityException) {
+                    r.scanRecord?.deviceName
+                } ?: return
                 if (name.startsWith("CASIO F-B100W")) {
-                    scanner.stopScan(this)
+                    stopScanQuietly(scanner, this)
                     _found.value = r.device
                 }
             }
 
             override fun onScanFailed(code: Int) {
-                _state.value = ConnState.ERROR
-                _statusLine.value = "scan failed: $code"
+                android.util.Log.w("TrrrstBLE", "scan failed, code=$code")
+                fail("Couldn't search for the watch. Turn Bluetooth off and on again, then try again.")
             }
         }
-        scanner.startScan(
-            null,
-            ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb
-        )
+        try {
+            scanner.startScan(
+                null,
+                ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb
+            )
+        } catch (e: SecurityException) {
+            android.util.Log.e("TrrrstBLE", "startScan not allowed", e)
+            fail(ScanCheck.NOT_ALLOWED); return
+        } catch (e: IllegalStateException) {   // Bluetooth switched off just now
+            android.util.Log.e("TrrrstBLE", "startScan failed", e)
+            fail(ScanCheck.BLUETOOTH_OFF); return
+        }
         scope.launch {
             delay(timeoutMs)
             if (_state.value == ConnState.SCANNING) {
-                scanner.stopScan(cb)
+                stopScanQuietly(scanner, cb)
                 _state.value = ConnState.DISCONNECTED
                 _statusLine.value = "watch not found"
             }
@@ -160,14 +211,25 @@ class BleManager(private val context: Context) {
                 writeWait?.complete(status == BluetoothGatt.GATT_SUCCESS)
             }
         }
-        gatt = dev.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
+        gatt = try {
+            dev.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
+        } catch (e: Exception) {   // SecurityException, or Bluetooth switched off
+            android.util.Log.e("TrrrstBLE", "connectGatt failed", e)
+            null
+        }
+        if (gatt == null) {
+            fail(ScanCheck.CONNECT_FAILED)
+            if (cont.isActive) cont.resume(false) {}
+            return@suspendCancellableCoroutine
+        }
         cont.invokeOnCancellation { closeGatt() }
     }
 
     private fun closeGatt() {
         gatt?.let {
-            it.disconnect()
-            it.close()
+            // Either call can throw if Bluetooth was just switched off; still close.
+            runCatching { it.disconnect() }
+            runCatching { it.close() }
         }
         gatt = null
         writeWait?.complete(false)
