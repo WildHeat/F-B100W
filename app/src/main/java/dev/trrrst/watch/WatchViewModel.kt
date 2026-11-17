@@ -10,20 +10,19 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.ble.Protocol
-import dev.trrrst.watch.ble.ScanCheck
 import dev.trrrst.watch.data.StepStore
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 data class City(val no: Int, val name: String, val tzMin: Int, val dstMin: Int, val rule: Int)
 
 class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private val preferences = app.getSharedPreferences("ui", Context.MODE_PRIVATE)
-    val ble = BleManager(app)
-    val steps = StepStore(app)
+    // App-scoped (TrrrstApp): they outlive this ViewModel, so the connection and
+    // step history survive the screen closing.
+    private val repo = (app as TrrrstApp).repository
+    val ble: BleManager = repo.ble
+    val steps: StepStore = repo.steps
     var accentIndex by mutableStateOf(preferences.getInt("accentIndex", 0))
         private set
     var stepsSnapshot by mutableStateOf(steps.last)
@@ -34,6 +33,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     var connState by mutableStateOf(BleManager.ConnState.DISCONNECTED)
     var status by mutableStateOf("")
     var busy by mutableStateOf(false)
+        private set
     var logLine by mutableStateOf("")
 
     // watch state
@@ -57,7 +57,19 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            ble.state.collectLatest { connState = it }
+            // Load the watch state whenever this screen sees the connection become
+            // ready. A new ViewModel on an already-open connection sees READY first,
+            // so it reloads instead of showing "connected" with empty data.
+            var wasReady = false
+            ble.state.collect {
+                connState = it
+                val ready = it == BleManager.ConnState.READY
+                if (ready && !wasReady) refreshAll()
+                wasReady = ready
+            }
+        }
+        viewModelScope.launch {
+            repo.busy.collect { busy = it }
         }
         viewModelScope.launch {
             ble.statusLine.collectLatest { status = it }
@@ -69,23 +81,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 updateRingtone(ringing)
             }
         }
-        viewModelScope.launch {
-            ble.found.collectLatest { dev ->
-                if (dev == null) return@collectLatest
-                // Runs outside op(): an exception here would otherwise crash the app.
-                val ok = try {
-                    ble.connect(dev)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    android.util.Log.e("Trrrst", "connect failed", e)
-                    ble.disconnect()
-                    ble.fail(ScanCheck.CONNECT_FAILED)
-                    false
-                }
-                if (ok) refreshAll()
-            }
-        }
+        // Connecting to a found watch is handled by WatchRepository (app-scoped).
         loadCities()
     }
 
@@ -141,21 +137,19 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() = ble.disconnect()
 
-    private val operationMutex = Mutex()
-
-    /** Queue complete operations in order. Every multi-command change runs as one
-     *  unit, and user actions are never silently discarded. */
+    /** Queue complete operations in order (shared app-wide via the repository).
+     *  Every multi-command change runs as one unit, and user actions are never
+     *  silently discarded. */
     private suspend fun <T> op(label: String, block: suspend () -> T): T? =
-        operationMutex.withLock {
-            busy = true
+        repo.exclusive {
             try {
                 block()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 android.util.Log.e("Trrrst", "$label failed", e)
                 log("$label failed: ${e.message}")
                 null
-            } finally {
-                busy = false
             }
         }
 
