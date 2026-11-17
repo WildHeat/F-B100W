@@ -3,6 +3,7 @@ package dev.trrrst.watch
 import android.app.Application
 import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.data.StepStore
+import dev.trrrst.watch.data.SyncLogStore
 
 /** Owns the parts that must outlive the screen: one Bluetooth connection, one step
  *  store, and the repository that coordinates them (PLAN 1.1). Background sync, the
@@ -10,5 +11,6 @@ import dev.trrrst.watch.data.StepStore
 class TrrrstApp : Application() {
     val ble by lazy { BleManager(this) }
     val steps by lazy { StepStore(this) }
-    val repository by lazy { WatchRepository(this, ble, steps) }
+    val syncLog by lazy { SyncLogStore(this) }
+    val repository by lazy { WatchRepository(this, ble, steps, syncLog) }
 }

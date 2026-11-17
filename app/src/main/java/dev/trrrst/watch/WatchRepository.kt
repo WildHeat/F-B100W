@@ -5,6 +5,8 @@ import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.ble.Protocol
 import dev.trrrst.watch.ble.ScanCheck
 import dev.trrrst.watch.data.StepStore
+import dev.trrrst.watch.data.SyncLogStore
+import dev.trrrst.watch.data.SyncRecord
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +24,9 @@ import java.util.TimeZone
 
 /** App-scoped coordinator for the watch connection (PLAN 1.1). Lives as long as the
  *  app process, so it is shared by the screen and, later, background sync. */
-class WatchRepository(context: Context, val ble: BleManager, val steps: StepStore) {
+class WatchRepository(
+    context: Context, val ble: BleManager, val steps: StepStore, val syncLog: SyncLogStore,
+) {
     private val app = context.applicationContext
     private val prefs = app.getSharedPreferences("watch", Context.MODE_PRIVATE)
 
@@ -127,7 +131,7 @@ class WatchRepository(context: Context, val ble: BleManager, val steps: StepStor
      *  steps (committing them on the watch) and save them. Needs an open connection;
      *  connecting is up to the caller for now (Phase 2/3 add connecting to the saved
      *  watch). Never throws: failures come back as a plain-English [SyncResult]. */
-    suspend fun sync(@Suppress("UNUSED_PARAMETER") trigger: SyncTrigger): SyncResult {
+    suspend fun sync(trigger: SyncTrigger): SyncResult {
         val result = if (ble.state.value != BleManager.ConnState.READY) {
             SyncResult(false, error = SyncMessages.NOT_CONNECTED)
         } else try {
@@ -159,6 +163,7 @@ class WatchRepository(context: Context, val ble: BleManager, val steps: StepStor
                 e, stillConnected = ble.state.value == BleManager.ConnState.READY))
         }
         _lastSync.value = result
+        syncLog.add(SyncRecord(System.currentTimeMillis(), trigger, result.ok, result.steps, result.error))
         return result
     }
 

@@ -35,6 +35,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.16.0")
     testImplementation("junit:junit:4.13.2")
+    // Real org.json for JVM unit tests (Android's copy is a stub there). Test-only.
+    testImplementation("org.json:json:20240303")
 }
 
 // ---- No-INTERNET guard (PLAN 1.3) ----------------------------------------
