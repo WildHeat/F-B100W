@@ -113,8 +113,11 @@ Steps:
 
 Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggested order: 1.3 → 1.1 → 1.2 → 1.4.
 
-- [ ] **1.1 App-scoped core.** `TrrrstApp : Application` owns one `BleManager` and one `StepStore`. A thin `WatchRepository` holds the shared sync logic.
+- [x] **1.1 App-scoped core.** `TrrrstApp : Application` owns one `BleManager` and one `StepStore`. A thin `WatchRepository` holds the shared sync logic.
+  - Branch `feat/app-scoped-core`. `WatchRepository` is the only collector of `ble.found` (so a new ViewModel can't auto-reconnect) and owns the operation mutex + `busy` (shared with background sync later). `WatchViewModel` calls `refreshAll()` whenever it sees `ConnState` become `READY`, including a new ViewModel on an open connection. `BleManager` unchanged.
+  - Confirmed on the Mi 8 (2026-11-17): connect → watch ended the session (status=19) → reconnect worked with one GATT client each time. Time sync, alarms and settings writes worked, and rotating the phone didn't reconnect or lose data. No errors or crashes in the log.
 - [ ] **1.2 Shared sync routine.** "connect → sync time → download steps → save → record result", used by both the UI and background sync.
+  - **Decision (user, 2026-11-17):** download steps automatically (commit, not peek) when the app connects.
 - [x] **1.3 No-INTERNET guard.** A build check that fails if `INTERNET` / `ACCESS_NETWORK_STATE` shows up in the merged manifest (catches libraries adding it).
   - Task `check<Variant>NoNetworkPermissions` in `app/build.gradle.kts` reads `SingleArtifact.MERGED_MANIFEST` and runs before `assemble<Variant>` and `check`, so CI's `assembleDebug` runs it too. Branch `build/no-internet-guard`.
   - Verified 2026-11-17: adding INTERNET to the manifest fails the build, and removing it passes again. Build-only, so no on-device test needed.
