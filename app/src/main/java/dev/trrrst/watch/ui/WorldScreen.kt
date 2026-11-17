@@ -58,10 +58,16 @@ fun WorldScreen(vm: WatchViewModel) {
         Box(Modifier.fillMaxSize().wrapContentSize()) { Text("Connect to the watch first") }
         return
     }
-    var home by remember { mutableStateOf(vm.homeCities.find { it.no == st.homeCity }) }
+    // The watch forgets its home city on disconnect, so fall back to the one the app
+    // remembers (and sends on every sync).
+    val watchHome = vm.homeCities.find { it.no == st.homeCity }
+    var home by remember { mutableStateOf(watchHome ?: vm.savedHomeCity()) }
     var world by remember { mutableStateOf(vm.worldCities.find { it.no == st.worldCity }) }
     var dstMode by remember(st) {
-        mutableStateOf(if (st.homeAuto) 0 else if (st.homeDstOn) 1 else 2)
+        mutableStateOf(
+            if (watchHome == null) vm.savedDstMode()
+            else if (st.homeAuto) 0 else if (st.homeDstOn) 1 else 2
+        )
     }
 
     LazyColumn(

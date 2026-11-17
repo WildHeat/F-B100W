@@ -2,6 +2,8 @@ package dev.trrrst.watch.data
 
 import android.content.Context
 import dev.trrrst.watch.ble.Protocol
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -25,6 +27,10 @@ class StepStore(context: Context) {
     var last: Snapshot? = null
         private set
     private val days = linkedMapOf<String, DayEntry>()
+
+    private val _changes = MutableStateFlow(0)
+    /** Bumps after every save, so screens (and later the widget) can reload. */
+    val changes: StateFlow<Int> = _changes
 
     init {
         load()
@@ -79,6 +85,7 @@ class StepStore(context: Context) {
             days.values.sortedBy { it.date }.takeLast(30)
         )
         save()
+        _changes.value++
     }
 
     fun history(): List<DayEntry> = days.values.sortedBy { it.date }
