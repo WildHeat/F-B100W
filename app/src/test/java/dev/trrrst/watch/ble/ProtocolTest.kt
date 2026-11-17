@@ -2,6 +2,7 @@ package dev.trrrst.watch.ble
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ProtocolTest {
@@ -67,6 +68,24 @@ class ProtocolTest {
         assertEquals(45, disabled[13].toInt())
         assertEquals(10, initial.withPeriod(10)[14].toInt())
         assertArrayEquals(initial.raw, initial.withAutoSync(0, 30, enabled = true))
+    }
+
+    @Test
+    fun freshWatchHasNoAutoSyncTime() {
+        // Inferred from the user's F-B100W (2026-11-17): enabling auto-sync on a fresh watch
+        // sent 110a0a0406005000040001007fff03, i.e. the stored bytes 12/13 were FF FF and only
+        // the "disabled" bit got cleared -> hour 127 / minute 255, which the watch rejected.
+        val fresh = Protocol.BleSettings(hex("110a0a040600500004000100ffff03"))
+        assertEquals(false, fresh.autoSyncEnabled)
+        assertEquals(false, fresh.hasAutoSyncTime)
+        assertThrows(IllegalArgumentException::class.java) {
+            fresh.withAutoSync(fresh.autoSyncHour, fresh.autoSyncMinute, enabled = true)
+        }
+        val on = fresh.withAutoSync(8, 0, enabled = true)
+        assertEquals(8, on[12].toInt())
+        assertEquals(0, on[13].toInt())
+        assertEquals(true, Protocol.BleSettings(on).hasAutoSyncTime)
+        assertEquals(true, Protocol.BleSettings(on).autoSyncEnabled)
     }
 
     @Test

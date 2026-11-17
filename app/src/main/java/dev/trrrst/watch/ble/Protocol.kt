@@ -173,8 +173,11 @@ object Protocol {
         val autoSyncHour get() = raw[12].toInt() and 0x7F
         val autoSyncMinute get() = raw[13].toInt() and 0xFF
         val connectingPeriod get() = raw[14].toInt() and 0xFF
+        /** A fresh watch stores FF FF ("no time set"); hour 127 / minute 255 is not a real time. */
+        val hasAutoSyncTime get() = autoSyncHour in 0..23 && autoSyncMinute in 0..59
 
         fun withAutoSync(hour: Int, minute: Int, enabled: Boolean): ByteArray {
+            require(hour in 0..23 && minute in 0..59) { "invalid auto-sync time $hour:$minute" }
             val b = raw.copyOf()
             b[12] = ((hour and 0x7F) or (if (enabled) 0 else 0x80)).toByte()
             b[13] = minute.toByte()

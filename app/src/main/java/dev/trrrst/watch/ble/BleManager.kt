@@ -32,7 +32,8 @@ class BleManager(private val context: Context) {
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     }
 
-    private var gatt: BluetoothGatt? = null
+    /** The one live GATT client. Accessed from binder callback threads and Main. */
+    @Volatile private var gatt: BluetoothGatt? = null
     private var device: BluetoothDevice? = null
     private val mutex = Mutex()
 
@@ -82,17 +83,31 @@ class BleManager(private val context: Context) {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun connect(dev: BluetoothDevice): Boolean = suspendCancellableCoroutine { cont ->
+        // A previous GATT client that was never closed (e.g. the watch ended the last
+        // session) gets reconnected by Android alongside the new one, and the two
+        // clobber each other's operations. Always start from exactly one client.
+        closeGatt()
+        drainQueues()
         device = dev
         _state.value = ConnState.CONNECTING
         _statusLine.value = "connecting…"
         val cb = object : BluetoothGattCallback() {
+            /** Callbacks from an older, already-replaced client are ignored. */
+            private fun stale(g: BluetoothGatt) = gatt.let { it != null && it !== g }
+
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+                if (stale(g)) { g.close(); return }
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
                         gatt = g
                         g.requestMtu(512)
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
+                        android.util.Log.d("TrrrstBLE", "disconnected, status=$status")
+                        // Release the client so Android doesn't revive it on the next connect.
+                        g.close()
+                        if (gatt === g) gatt = null
+                        writeWait?.complete(false)   // fail any in-flight op right away
                         _state.value = ConnState.DISCONNECTED
                         _statusLine.value = "disconnected"
                         if (cont.isActive) cont.resume(false) {}
@@ -101,10 +116,12 @@ class BleManager(private val context: Context) {
             }
 
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+                if (stale(g)) return
                 g.discoverServices()
             }
 
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                if (stale(g)) return
                 scope.launch {
                     val ok = runCatching {
                         enableNotify(Protocol.CHR_ALL_FEATURES)
@@ -132,16 +149,34 @@ class BleManager(private val context: Context) {
             override fun onCharacteristicWrite(
                 g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int
             ) {
+                if (stale(g)) return
                 writeWait?.complete(status == BluetoothGatt.GATT_SUCCESS)
             }
 
             override fun onDescriptorWrite(
                 g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int
             ) {
+                if (stale(g)) return
                 writeWait?.complete(status == BluetoothGatt.GATT_SUCCESS)
             }
         }
-        dev.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
+        gatt = dev.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
+        cont.invokeOnCancellation { closeGatt() }
+    }
+
+    private fun closeGatt() {
+        gatt?.let {
+            it.disconnect()
+            it.close()
+        }
+        gatt = null
+        writeWait?.complete(false)
+    }
+
+    private fun drainQueues() {
+        while (afQueue.tryReceive().isSuccess) Unit
+        while (drspQueue.tryReceive().isSuccess) Unit
+        while (convoyQueue.tryReceive().isSuccess) Unit
     }
 
     private fun dispatch(uuid: UUID, value: ByteArray) {
@@ -157,9 +192,7 @@ class BleManager(private val context: Context) {
     }
 
     fun disconnect() {
-        gatt?.disconnect()
-        gatt?.close()
-        gatt = null
+        closeGatt()
         _found.value = null
         _state.value = ConnState.DISCONNECTED
     }
