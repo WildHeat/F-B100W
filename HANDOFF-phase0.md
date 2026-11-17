@@ -1,12 +1,14 @@
 # Handoff: finish Phase 0, then start Phase 1
 
+> **Historical record. Phase 0 is done.** New sessions start from [HANDOFF-phase1.md](HANDOFF-phase1.md).
+
 Self-contained brief for a new session. Read this, then [CLAUDE.md](CLAUDE.md) (project rules) and [PLAN.md](PLAN.md) (roadmap, bug records, status). You don't need any earlier chat history.
 
 Last updated: 2026-11-17.
 
 ## Where things stand
 
-The app **works on the user's Xiaomi Mi 8 (Android 10)** with their Casio F-B100W. The fixes below were merged to `master` (PR #1). The Phase 0 safety net and step download are confirmed too (branch **`fix/phase0-safety-net`**, committed by the user). **Phase 0 is done.** Next is Phase 1, only when the user asks.
+The app **works on the user's Xiaomi Mi 8 (Android 10)** with their Casio F-B100W. The fixes below were merged to `master` (PR #1). The Phase 0 safety net and step download are confirmed too (merged to `master` in PR #2). **Phase 0 is done.** Next is Phase 1, only when the user asks.
 
 Fixed and **confirmed on the real watch by the user**:
 

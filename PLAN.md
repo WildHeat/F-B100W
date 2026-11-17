@@ -111,6 +111,8 @@ Steps:
 
 ## Phase 1: Groundwork (no visible features)
 
+Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggested order: 1.3 → 1.1 → 1.2 → 1.4.
+
 - [ ] **1.1 App-scoped core.** `TrrrstApp : Application` owns one `BleManager` and one `StepStore`. A thin `WatchRepository` holds the shared sync logic.
 - [ ] **1.2 Shared sync routine.** "connect → sync time → download steps → save → record result", used by both the UI and background sync.
 - [ ] **1.3 No-INTERNET guard.** A build check that fails if `INTERNET` / `ACCESS_NETWORK_STATE` shows up in the merged manifest (catches libraries adding it).
