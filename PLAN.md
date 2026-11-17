@@ -139,6 +139,8 @@ Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggeste
 
 ## Phase 2: Remember your watch
 
+Brief, pitfalls and test steps: [HANDOFF-phase2.md](HANDOFF-phase2.md). Known: the BLE address equals the MAC the watch reports in `OP_BLE_FEATURES`. It stays the same across reconnects but changes after a watch reset.
+
 - [ ] After the first successful connect, save the watch's address and name.
 - [ ] **Find out if the address is stable:** log the address on each connect for a few days. The app also reads the watch's MAC from `OP_BLE_FEATURES`; compare the two.
   - Stable → connect directly with `getRemoteDevice(address)`, falling back to a scan filtered by that address.
