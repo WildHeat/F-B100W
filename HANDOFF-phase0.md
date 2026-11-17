@@ -6,7 +6,7 @@ Last updated: 2026-11-17.
 
 ## Where things stand
 
-The app **works on the user's Xiaomi Mi 8 (Android 10)** with their Casio F-B100W. All of this is on branch `fix/android10-bluetooth-permissions` (commit `36738d0` plus a follow-up). The user is opening a PR for it.
+The app **works on the user's Xiaomi Mi 8 (Android 10)** with their Casio F-B100W. The fixes below were merged to `master` (PR #1). The Phase 0 safety net and step download are confirmed too (branch **`fix/phase0-safety-net`**, committed by the user). **Phase 0 is done.** Next is Phase 1, only when the user asks.
 
 Fixed and **confirmed on the real watch by the user**:
 
@@ -63,15 +63,16 @@ cd "/c/Users/lowid/Desktop/Research/FB-100 app/F-B100W"
   "$ADB" -s 52b2b2ca shell dumpsys dropbox --print data_app_crash | grep -A40 "dev.trrrst.watch"
   ```
 
-## What's left in Phase 0
+## Phase 0 wrap-up (all done 2026-11-17)
 
-1. **Step download (commit) not yet confirmed.** The home screen's **Download** button calls `fetchSteps(peek=false)`. This *consumes* the hourly data on the watch. Ask the user to try it once and compare with the watch's step count. Check the log for `drsp`/`steps` errors.
-2. **Safety net, so Bluetooth problems show a message instead of crashing** (small code change):
-   - `BleManager.scan()`: handle a missing adapter / Bluetooth off (`bluetoothAdapter?.isEnabled != true`) and `try/catch (SecurityException)` around `bluetoothLeScanner`/`startScan`. On failure: `ConnState.ERROR` + a plain-English `statusLine` ("Bluetooth is off. Turn it on and try again.").
-   - On Android ≤ 30: if Location is **switched off** (`LocationManager.isLocationEnabled`, API 28+), show "Location is off. Android 10 needs it on to find the watch." instead of scanning.
-   - `WatchViewModel` init: `ble.found.collectLatest { if (ble.connect(dev)) refreshAll() }` runs outside `op()`. Wrap it so a connect exception logs and resets state instead of crashing.
-   - Test ideas for the user: press Connect with Bluetooth off, and with Location off. The app should stay open and explain what to do.
-3. Tick the remaining Phase 0 boxes in `PLAN.md` and tell the user what to commit.
+1. **Step download (commit): confirmed working.** The home screen's **Download** button calls `fetchSteps(peek=false)`. This *consumes* the hourly data on the watch. Ask the user to try it once and compare with the watch's step count. Check the log for `drsp`/`steps` errors.
+2. **Safety net: confirmed working** (branch `fix/phase0-safety-net`, 14/14 tests pass, no INTERNET):
+   - `ble/ScanCheck.kt` (pure, tested in `ScanCheckTest`): no adapter / Bluetooth off / Location off (Android ≤ 11 only) → plain-English message.
+   - `BleManager.scan()` runs the check first, and catches `SecurityException`/`IllegalStateException` around `bluetoothLeScanner`, `startScan`, `stopScan`. Failures → `fail(msg)` = `ConnState.ERROR` + status line.
+   - `BleManager.connect()` catches a failing `connectGatt`. `closeGatt()` no longer throws.
+   - `WatchViewModel` init wraps the automatic connect in try/catch (rethrows `CancellationException`).
+   - **User test:** Connect with Bluetooth off, then with Location off. The app stays open and shows the message. Then a normal connect still works. If all good, tick the two `[~]` safety-net boxes in `PLAN.md`.
+3. Both confirmed. Phase 0 is done.
 
 ## After Phase 0 (only when the user asks)
 

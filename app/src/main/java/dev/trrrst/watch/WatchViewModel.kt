@@ -10,7 +10,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.ble.Protocol
+import dev.trrrst.watch.ble.ScanCheck
 import dev.trrrst.watch.data.StepStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -69,9 +71,19 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             ble.found.collectLatest { dev ->
-                if (dev != null) {
-                    if (ble.connect(dev)) refreshAll()
+                if (dev == null) return@collectLatest
+                // Runs outside op(): an exception here would otherwise crash the app.
+                val ok = try {
+                    ble.connect(dev)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.e("Trrrst", "connect failed", e)
+                    ble.disconnect()
+                    ble.fail(ScanCheck.CONNECT_FAILED)
+                    false
                 }
+                if (ok) refreshAll()
             }
         }
         loadCities()
