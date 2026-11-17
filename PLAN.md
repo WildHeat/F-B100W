@@ -113,6 +113,8 @@ Steps:
 
 Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggested order: 1.3 → 1.1 → 1.2 → 1.4.
 
+**Phase 1 done (2026-11-17).** All four items confirmed on the Mi 8.
+
 - [x] **1.1 App-scoped core.** `TrrrstApp : Application` owns one `BleManager` and one `StepStore`. A thin `WatchRepository` holds the shared sync logic.
   - Branch `feat/app-scoped-core`. `WatchRepository` is the only collector of `ble.found` (so a new ViewModel can't auto-reconnect) and owns the operation mutex + `busy` (shared with background sync later). `WatchViewModel` calls `refreshAll()` whenever it sees `ConnState` become `READY`, including a new ViewModel on an open connection. `BleManager` unchanged.
   - Confirmed on the Mi 8 (2026-11-17): connect → watch ended the session (status=19) → reconnect worked with one GATT client each time. Time sync, alarms and settings writes worked, and rotating the phone didn't reconnect or lose data. No errors or crashes in the log.
@@ -129,7 +131,11 @@ Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggeste
 - [x] **1.3 No-INTERNET guard.** A build check that fails if `INTERNET` / `ACCESS_NETWORK_STATE` shows up in the merged manifest (catches libraries adding it).
   - Task `check<Variant>NoNetworkPermissions` in `app/build.gradle.kts` reads `SingleArtifact.MERGED_MANIFEST` and runs before `assemble<Variant>` and `check`, so CI's `assembleDebug` runs it too. Branch `build/no-internet-guard`.
   - Verified 2026-11-17: adding INTERNET to the manifest fails the build, and removing it passes again. Build-only, so no on-device test needed.
-- [ ] **1.4 Sync log.** `SyncRecord(time, trigger, ok, steps?, error?)`, last 10 kept. Used by background sync, the widget and the sync history list.
+- [x] **1.4 Sync log.** `SyncRecord(time, trigger, ok, steps?, error?)`, last 10 kept. Used by background sync, the widget and the sync history list.
+  - Branch `feat/sync-log`. `data/SyncLog.kt`: pure `SyncLog` (newest first, trim to 10, JSON round-trip, never throws on bad data; `SyncLogTest`, 6 tests) + `SyncLogStore` (SharedPreferences `watch`/`syncLog`, `records` StateFlow). `WatchRepository.sync()` records every attempt. Errors are the `SyncMessages` texts. Not shown in the UI yet.
+  - Test-only dependency `org.json:json` (Android's org.json is a stub in JVM tests). Not in the app's runtime classpath.
+  - Confirmed on the Mi 8 (2026-11-17, 21:49): `shared_prefs/watch.xml` holds `[{"time":1794952161090,"trigger":"MANUAL","ok":true,"steps":1058}]` after one connect.
+  - **Watch observation, same session:** this time the watch still had London when it reconnected (`1D` read `…e776…`). In every earlier test where it had forgotten, the time had been **changed by hand on the watch** in between. So a manual time change probably clears the city, not the disconnect itself. Not proven. Either way, re-sending the city on every sync is harmless and stays.
 
 ## Phase 2: Remember your watch
 
