@@ -115,7 +115,9 @@ Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggeste
 
 - [ ] **1.1 App-scoped core.** `TrrrstApp : Application` owns one `BleManager` and one `StepStore`. A thin `WatchRepository` holds the shared sync logic.
 - [ ] **1.2 Shared sync routine.** "connect → sync time → download steps → save → record result", used by both the UI and background sync.
-- [ ] **1.3 No-INTERNET guard.** A build check that fails if `INTERNET` / `ACCESS_NETWORK_STATE` shows up in the merged manifest (catches libraries adding it).
+- [x] **1.3 No-INTERNET guard.** A build check that fails if `INTERNET` / `ACCESS_NETWORK_STATE` shows up in the merged manifest (catches libraries adding it).
+  - Task `check<Variant>NoNetworkPermissions` in `app/build.gradle.kts` reads `SingleArtifact.MERGED_MANIFEST` and runs before `assemble<Variant>` and `check`, so CI's `assembleDebug` runs it too. Branch `build/no-internet-guard`.
+  - Verified 2026-11-17: adding INTERNET to the manifest fails the build, and removing it passes again. Build-only, so no on-device test needed.
 - [ ] **1.4 Sync log.** `SyncRecord(time, trigger, ok, steps?, error?)`, last 10 kept. Used by background sync, the widget and the sync history list.
 
 ## Phase 2: Remember your watch
