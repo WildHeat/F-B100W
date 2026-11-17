@@ -42,6 +42,12 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     var temperature by mutableStateOf(0)
     var findPhoneRinging by mutableStateOf(false)
 
+    /** The remembered watch (Settings), and a different watch waiting for the user's answer. */
+    var savedWatch by mutableStateOf(repo.savedWatch.value)
+        private set
+    var pendingWatch by mutableStateOf(repo.pendingWatch.value)
+        private set
+
     var alarms by mutableStateOf<List<Protocol.Alarm>?>(null)
     var hourlyChime by mutableStateOf(false)
     var basic by mutableStateOf<Protocol.Basic?>(null)
@@ -74,6 +80,12 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             repo.busy.collect { busy = it }
+        }
+        viewModelScope.launch {
+            repo.savedWatch.collect { savedWatch = it }
+        }
+        viewModelScope.launch {
+            repo.pendingWatch.collect { pendingWatch = it }
         }
         viewModelScope.launch {
             // Step data can change from outside this screen (sync on connect, later
@@ -137,7 +149,12 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         preferences.edit().putInt("accentIndex", index).apply()
     }
 
-    fun scanConnect() = ble.scan()
+    /** Search for the saved watch (or any F-B100W if none is saved). */
+    fun scanConnect() = ble.scan(repo.savedWatch.value?.address)
+
+    fun useThisWatch() = repo.useThisWatch()
+    fun rejectWatch() = repo.rejectWatch()
+    fun forgetWatch() = repo.forgetWatch()
 
     fun disconnect() = ble.disconnect()
 

@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.trrrst.watch.ui.*
@@ -94,4 +96,30 @@ fun AppScaffold(vm: WatchViewModel) {
             }
         }
     }
+    vm.pendingWatch?.let { NotYourWatchDialog(vm, it) }
+}
+
+/** A different F-B100W connected (PLAN Phase 2). Nothing has been written to it yet. */
+@Composable
+private fun NotYourWatchDialog(vm: WatchViewModel, other: SavedWatch) {
+    AlertDialog(
+        onDismissRequest = { vm.rejectWatch() },   // back button = Cancel
+        properties = DialogProperties(dismissOnClickOutside = false),
+        title = { Text("This isn't your saved watch") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The app is connected to a different F-B100W. If you reset your watch, " +
+                        "its Bluetooth address changes, so this may still be yours."
+                )
+                Text("If you use it, the app will set its time and download its steps.")
+                Text(
+                    "Saved watch: ${vm.savedWatch?.address ?: "none"}\nThis watch: ${other.address}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { vm.useThisWatch() }) { Text("Use this watch") } },
+        dismissButton = { TextButton(onClick = { vm.rejectWatch() }) { Text("Cancel") } },
+    )
 }
