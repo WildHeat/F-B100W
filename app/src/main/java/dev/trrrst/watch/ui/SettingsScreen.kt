@@ -19,8 +19,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.trrrst.watch.WatchViewModel
 
-private val DATE_ORDERS = listOf("YMD", "YDM", "MDY", "DMY")
-private val LANGS = listOf("EN", "ES", "FR", "DE", "IT", "RU")
 private val PERIODS = listOf(3, 5, 10, 60, 90, 120)
 
 @Composable
@@ -38,8 +36,9 @@ fun SettingsScreen(vm: WatchViewModel) {
 
     var period by remember(bs) { mutableStateOf(bs.connectingPeriod) }
     var autoOn by remember(bs) { mutableStateOf(bs.autoSyncEnabled) }
-    var autoH by remember(bs) { mutableStateOf(bs.autoSyncHour) }
-    var autoM by remember(bs) { mutableStateOf(bs.autoSyncMinute) }
+    // A fresh watch has no auto-sync time (FF FF); offer 08:00 instead of 127:255.
+    var autoH by remember(bs) { mutableStateOf(if (bs.hasAutoSyncTime) bs.autoSyncHour else 8) }
+    var autoM by remember(bs) { mutableStateOf(if (bs.hasAutoSyncTime) bs.autoSyncMinute else 0) }
     var goal by remember(prof) { mutableStateOf(prof.stepGoal.toString()) }
     var height by remember(prof) { mutableStateOf(prof.height.toString()) }
     var weight by remember(prof) { mutableStateOf(prof.weight.toString()) }
@@ -68,10 +67,8 @@ fun SettingsScreen(vm: WatchViewModel) {
         item { SettingSwitch("Key sounds", b.buttonTone) { vm.saveBasic { c -> c.copy(buttonTone = it) } } }
         item { SettingSwitch("Power saving", b.powerSaving) { vm.saveBasic { c -> c.copy(powerSaving = it) } } }
         item { SettingSwitch("Long light (3 s)", b.lightLong) { vm.saveBasic { c -> c.copy(lightLong = it) } } }
-        item {
-            ChoiceRow("Date order", DATE_ORDERS, b.dateOrder) { vm.saveBasic { c -> c.copy(dateOrder = it) } }
-            ChoiceRow("Language", LANGS, b.language) { vm.saveBasic { c -> c.copy(language = it) } }
-        }
+        // Date order and Language were removed (2026-11-17): the F-B100W accepts the 0x13
+        // bytes but its display doesn't change. Basic.encode() still preserves them.
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         item { Text("Find phone", style = MaterialTheme.typography.titleSmall) }
         item {
@@ -106,7 +103,11 @@ fun SettingsScreen(vm: WatchViewModel) {
                 Text("Auto time sync")
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = {
-                    TimePickerDialog(ctx, { _, h, m -> autoH = h; autoM = m }, autoH, autoM, true).show()
+                    TimePickerDialog(ctx, { _, h, m ->
+                        autoH = h; autoM = m
+                        // Already on: a new time must reach the watch, not just the screen.
+                        if (autoOn) vm.saveAutoSync(h, m, true)
+                    }, autoH, autoM, true).show()
                 }) { Mono("%02d:%02d".format(autoH, autoM)) }
                 Switch(checked = autoOn, onCheckedChange = {
                     autoOn = it; vm.saveAutoSync(autoH, autoM, it)

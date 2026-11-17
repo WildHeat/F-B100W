@@ -3,6 +3,14 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
+    <!-- Android 11 (API 30) and lower: legacy Bluetooth permissions, granted at install.
+         Without them getBluetoothLeScanner()/startScan()/connectGatt() throw
+         SecurityException (crashed on Android 10 when pressing Connect). -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
