@@ -2,9 +2,9 @@
 
 TRRRST Watch: a FOSS, fully offline Android companion app for the **Casio F-B100W** (module 3589), talking to it over BLE. This repo is a **personal fork** (`origin` = WildHeat/F-B100W) of `taxmeifyoucan/trrrst-watch`, licensed AGPL-3.0. No upstream PRs are planned. Don't shape changes around upstream style.
 
-**Current blocker:** the v0.4 release crashes on the Mi 8 (Android 10) as soon as Connect is pressed, and has never worked there. The watch then shows `Err`. **Confirmed cause:** a `SecurityException` at `BleManager.scan()` because the manifest is missing `BLUETOOTH`/`BLUETOOTH_ADMIN` (`maxSdkVersion="30"`). The app never reaches the watch. Fix it first (PLAN Phase 0 has the full crash record). On MIUI, read crash traces with `adb shell dumpsys dropbox --print data_app_crash`, since they don't appear in logcat.
+**Status (2026-11-17):** the app works on the user's Mi 8 (Android 10). The Android 10 crash, the reconnect failure and the auto-sync bug are fixed and confirmed on the real watch. Phase 0 still needs a step-download check and a crash-proofing safety net. **Start from [HANDOFF-phase0.md](HANDOFF-phase0.md).**
 
-The Mi 8 is reachable over adb at `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe` (not on PATH). Ask before installing or uninstalling anything on the phone.
+The Mi 8 is reachable over adb at `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe` (not on PATH). Use `-s 52b2b2ca`, since an emulator is often running too. It's the user's personal phone, so only read logs for `dev.trrrst.watch`. **The user installs builds (Android Studio ▶ Run) and commits themselves.** On MIUI, read crash traces with `adb shell dumpsys dropbox --print data_app_crash`, since they don't appear in logcat.
 
 - **What we're building and why:** [TRRRST-Watch-Improvements.md](TRRRST-Watch-Improvements.md)
 - **How, phase by phase, with status:** [PLAN.md](PLAN.md). Read it before starting feature work and update the checkboxes as you go.
@@ -13,7 +13,8 @@ The Mi 8 is reachable over adb at `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb
 
 - **Never add the `INTERNET` permission** (or `ACCESS_NETWORK_STATE`), directly or through a dependency. After adding any library, check the merged manifest: `app/build/intermediates/merged_manifest/debug/.../AndroidManifest.xml`.
 - **Don't add dependencies lightly.** No Google Play Services, Firebase, analytics or proprietary SDKs. Approved: Jetpack Glance (widget). Health Connect was considered and dropped.
-- **Don't call `createBond()`/pairing** until Phase 0 shows it's safe. Pairing is linked to the watch `Err` state.
+- **Don't call `createBond()`/pairing.** It has never been tested on this watch, and connecting works fine without it.
+- **Always `close()` a `BluetoothGatt` when it disconnects.** Leftover clients get revived by Android and break the next connection (see the PLAN Phase 0 bug record).
 - **Don't change BLE byte layouts in `Protocol.kt` by guesswork.** Layouts were confirmed against captures. Anything new needs a captured hex fixture and a test in `ProtocolTest`. Bad writes can soft-brick the watch (see README). Never write to watch memory/firmware areas.
 - **Watch writes are read-modify-write.** Read the current value, change only the managed bits, write it back (see `saveBasic`, `saveAlarms`, `BleSettings.with*`). Keep it that way.
 - One feature per branch/PR, small changes. Features are only "done" after testing on the real watch, which Claude can't do, so say what still needs on-device verification.

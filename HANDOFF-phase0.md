@@ -1,89 +1,84 @@
-# Handoff: Phase 0, first working connection on the Mi 8
+# Handoff: finish Phase 0, then start Phase 1
 
-Self-contained brief for a new session. Read this, then [CLAUDE.md](CLAUDE.md) (project rules) and Phase 0 of [PLAN.md](PLAN.md) (crash record). You don't need any earlier chat history.
+Self-contained brief for a new session. Read this, then [CLAUDE.md](CLAUDE.md) (project rules) and [PLAN.md](PLAN.md) (roadmap, bug records, status). You don't need any earlier chat history.
 
-## Goal
+Last updated: 2026-11-17.
 
-Get TRRRST Watch connecting to the user's Casio F-B100W from their Xiaomi Mi 8 (Android 10) **without crashing**. First reading from the watch, then (one at a time) writing to it. Phase 0 is done when Connect works every time, the watch never shows `Err`, and **Sync time** + **step download** work.
+## Where things stand
 
-## Background (what happened so far, 2026-11-17)
+The app **works on the user's Xiaomi Mi 8 (Android 10)** with their Casio F-B100W. All of this is on branch `fix/android10-bluetooth-permissions` (commit `36738d0` plus a follow-up). The user is opening a PR for it.
 
-- The GitHub release v0.4 crashed the moment **Connect** was pressed. It has **never** worked on this phone, and the watch has **never** been connected to any app (the official Casio app doesn't run on the Mi 8).
-- After each crash the watch showed `Err` (no code). The watch is otherwise fine. `Err` was just the watch's own connection attempt timing out.
-- **Confirmed cause:** `SecurityException: Need BLUETOOTH permission` at `BleManager.scan()` (`BleManager.kt:51`). The manifest only had Android 12+ Bluetooth permissions. The app died **before any Bluetooth traffic**, so the BLE protocol code has never run against this watch.
-- **Done already:**
-  - Branch `fix/android10-bluetooth-permissions` created from `master`.
-  - `app/src/main/AndroidManifest.xml`: added `BLUETOOTH` and `BLUETOOTH_ADMIN`, both `maxSdkVersion="30"`. **Not committed.** The user hasn't asked for a commit, so ask before committing.
-  - `./gradlew testDebugUnitTest assembleDebug` passes (7/7 `ProtocolTest`). APK at `app/build/outputs/apk/debug/app-debug.apk`. `aapt dump permissions` confirms both new permissions and no INTERNET.
-  - **v0.4 has been uninstalled** from the phone. **Nothing is installed now.**
-- Untracked files in the repo root: `CLAUDE.md`, `PLAN.md`, `TRRRST-Watch-Improvements.md` (the feature wishlist), and this file. Don't delete them.
+Fixed and **confirmed on the real watch by the user**:
+
+| Issue | Cause | Fix |
+| --- | --- | --- |
+| Crash on Connect | Manifest lacked Android ≤11 permissions (`SecurityException: Need BLUETOOTH permission` in `BleManager.scan()`) | `BLUETOOTH` + `BLUETOOTH_ADMIN` with `maxSdkVersion="30"` |
+| Second connect fails (`watch write failed`, watch keeps flashing CNCT) | `gatt.close()` never called when the *watch* disconnected; Android revived the old client next to the new one | `BleManager`: close on `STATE_DISCONNECTED`, `closeGatt()` + `drainQueues()` before every connect, ignore stale-client callbacks, fail in-flight write on disconnect |
+| Auto time sync switch flips back off | Fresh watch stores `FF FF`; enabling sent hour 127 / minute 255 | Default 08:00 in the UI, `BleSettings.hasAutoSyncTime`, `withAutoSync` rejects invalid times, time-picker saves when already on. Test `freshWatchHasNoAutoSyncTime`. |
+| Date order / Language do nothing | Watch accepts the `0x13` bytes 4/5 but its display never changes | Rows removed from Settings. `Basic.encode()` still preserves the bytes. |
+
+User-confirmed working: connect, reconnect after the watch disconnects, Sync time, all settings writes, and settings surviving reconnects. 8/8 unit tests pass. The APK has no INTERNET permission.
+
+Facts learned (keep in mind):
+- The watch's BLE address **stays the same across reconnects but changes after a watch reset** (`E5:33:8D:36:F8:03` → `D5:33:BC:22:F8:03`). This matters for Phase 2 "Remember your watch".
+- The watch ends sessions itself (`onClientConnectionState status=19`). That's normal.
+- Auto time sync is set on the watch side only. At that time the watch tries to connect, but nothing on the phone answers until Phase 3 (background sync).
+- The official Casio app can't run on the Mi 8, so there are **no reference captures**. New protocol behaviour has to be worked out by experiment, read-first.
 
 ## Rules (from the user, they matter)
 
-1. **The Mi 8 is the user's personal phone.** Only touch the `dev.trrrst.watch` app on it: install/uninstall it, read logs and crash reports. No system settings, no other apps. If something else needs changing, ask the user to do it.
-2. **Never add the INTERNET permission.** Check the APK after every build (command below).
-3. **Read before write on the watch.** The first connection only reads. Writes come one at a time, after the user agrees. A bad write can soft-brick the watch (the upstream author had to open one up).
-4. **Ask before** installing anything, committing, or doing writes. Don't start feature work (Phases 1+) without being asked.
-5. Talk to the user in plain English. They aren't an Android developer.
+1. **The Mi 8 is the user's personal phone.** Only touch the `dev.trrrst.watch` app: read its logs and crash reports. No system settings, no other apps. Use read-only adb commands (`logcat -d`, `dumpsys`). Never `logcat -c`.
+2. **The user installs builds themselves** via Android Studio ▶ Run, and **commits/opens PRs themselves.** Build and test locally, then tell them what to test. Don't install, commit or push unless asked.
+3. **Never add the INTERNET permission.** Check every built APK.
+4. **Read before write on the watch.** New kinds of writes are tested one at a time, after the user agrees. A bad write can soft-brick the watch.
+5. Don't start a new phase without being asked. Talk in plain English. The user isn't an Android developer.
 
-## Environment quirks (this Windows PC)
+## Environment (this Windows PC)
 
-- **Use Git Bash** (`Bash` tool). There's **no `gradlew.bat`**; run `./gradlew`.
-- **JDK:** the default `java` and Android Studio's JBR are **Java 25, which Gradle 8.14 can't run on** (fails with just `25.0.4`). Use the installed JDK 17:
+- Use **Git Bash** (`Bash` tool). There's no `gradlew.bat`, so run `./gradlew`.
+- **JDK:** the default `java` and Android Studio's JBR are Java 25, which Gradle 8.14 can't run on (fails with just `25.0.4`). Use:
   ```sh
   export JAVA_HOME="$USERPROFILE/.jdks/corretto-17.0.13"
   export ANDROID_HOME="$LOCALAPPDATA/Android/Sdk"
   ```
-- **adb** isn't on PATH: `ADB="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"`. The phone shows up as `MI_8` / `dipper`, USB debugging and "Install via USB" are on.
-- **Network:** the first dependency download failed with Java DNS errors (`Could not GET … repo.maven.apache.org`) while `curl` worked. A plain retry fixed it. Dependencies are now cached.
-- A clean build takes ~7 minutes. Use `timeout: 600000` and `--no-daemon` (or leave the daemon running for faster rebuilds).
-- **MIUI keeps crash stack traces out of logcat.** Read them with:
-  ```sh
-  "$ADB" shell dumpsys dropbox --print data_app_crash | grep -A40 "dev.trrrst.watch"
-  ```
-  Don't clear logcat (`logcat -c`). Use `-T 1` to only record new lines.
+  In Android Studio the user has set **Settings → Build Tools → Gradle → Gradle JDK = corretto-17** for the same reason.
+- **adb** isn't on PATH: `ADB="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"`. An **emulator is often running too**, so always pass `-s 52b2b2ca` (the Mi 8). If the phone shows `offline`, `"$ADB" reconnect offline`. If it then shows `unauthorized`, ask the user to accept the USB-debugging prompt. If adb hangs on `waiting for device`, the phone is unplugged, so ask the user.
+- The first dependency download once failed with Java DNS errors while `curl` worked. A plain retry fixed it.
 
-Useful commands:
+Commands:
 ```sh
 cd "/c/Users/lowid/Desktop/Research/FB-100 app/F-B100W"
-./gradlew --no-daemon testDebugUnitTest assembleDebug
-"$ANDROID_HOME/build-tools/36.0.0/aapt.exe" dump permissions app/build/outputs/apk/debug/app-debug.apk   # must NOT list INTERNET
-"$ADB" install -r app/build/outputs/apk/debug/app-debug.apk
-# record logs while the user tests (background, 3 min):
-timeout 180 "$ADB" logcat -v time -T 1 -b main,system,crash > "<scratchpad>/run.log"
+./gradlew testDebugUnitTest assembleDebug
+"$ANDROID_HOME/build-tools/36.0.0/aapt.exe" dump permissions app/build/outputs/apk/debug/app-debug.apk | grep -iE "internet|network" || echo "no INTERNET"
 ```
-Then search the log for `TrrrstBLE|Trrrst|AndroidRuntime|BluetoothGatt|bt_btif|dev.trrrst`.
 
-## Steps
+### Reading what happened on the phone
+- The user tests first, then you read the log afterwards. **The phone's log buffer keeps recent sessions**, so there's no need to record live:
+  ```sh
+  "$ADB" -s 52b2b2ca logcat -d -v time -b main,system > "<scratchpad>/run.log"
+  ```
+  Find the app's PIDs with `grep "Start proc [0-9]*:dev.trrrst.watch"`. Useful tags: `TrrrstBLE` (every write, as hex), `Trrrst` (op failures with stack traces), `BluetoothGatt` (connect/MTU/discovery/`onClientConnectionState status=…`, `clientIf=` shows how many clients exist).
+- **Crash traces don't appear in logcat on MIUI.** Read them with:
+  ```sh
+  "$ADB" -s 52b2b2ca shell dumpsys dropbox --print data_app_crash | grep -A40 "dev.trrrst.watch"
+  ```
 
-### 1. Install and first connect (reads only)
-1. Ask the user before installing. Then `adb install -r` the debug APK.
-2. Tell the user: open the app → grant the Location/Bluetooth permission prompt → make sure Bluetooth **and** Location are on → hold **C** on the watch → press **Connect** once. Start the logcat recording first.
-3. What Connect does: `scan()` (looks for name `CASIO F-B100W`) → `connect()` (GATT, MTU 512, discover services, enable notifications on 0x2D) → `refreshAll()`.
-   - `refreshAll()` only **reads** opcodes 0x10, 0x20, 0x28, 0x15, 0x16, 0x13, 0x11, 0x2D, 0x18, 0x1D, 0x1E×2.
-   - Then it peeks steps (`receive(CAT_EXERCISE, commit=false)`). The peek sends the "abort" command (3), so the step data stays on the watch.
-   - **No writes happen on connect.**
-4. Check the result with the user: battery %, firmware version, alarms, settings, steps on the home screen. Do they match the watch? Note anything that looks wrong.
-5. If it crashes or fails, get the dropbox trace and logcat, find the failing step (scan / connect / MTU / services / notify / which read), and fix it. Possible Android 10 issues:
-   - a scan that never finds the watch (watch only advertises briefly after holding C)
-   - `requestMtu(512)` not supported
-   - a `GATT 133` connect error, which is common on Xiaomi. Retry once, or set `autoConnect=false` (already set).
+## What's left in Phase 0
 
-### 2. Safety net (code change, small)
-Stop Bluetooth failures from crashing the app:
-- `BleManager.scan()`: wrap `bluetoothLeScanner`/`startScan` in `try/catch (SecurityException)`. Handle adapter missing or Bluetooth off (`bluetoothAdapter?.isEnabled != true`). On failure: set `ConnState.ERROR` + a plain-English `statusLine` ("Bluetooth is off. Turn it on and try again.").
-- On Android ≤ 30, check that Location is **switched on** (`LocationManager.isLocationEnabled`, API 28+) before scanning. Show "Location is off. Android 10 needs it on to find the watch." if not.
-- `WatchViewModel`'s `ble.found.collectLatest { ble.connect(dev) … }` runs outside `op()`. Wrap it so a connect exception logs and resets state instead of crashing.
-- Don't touch `Protocol.kt` byte layouts.
-- Rebuild, re-check permissions, reinstall, re-test.
+1. **Step download (commit) not yet confirmed.** The home screen's **Download** button calls `fetchSteps(peek=false)`. This *consumes* the hourly data on the watch. Ask the user to try it once and compare with the watch's step count. Check the log for `drsp`/`steps` errors.
+2. **Safety net, so Bluetooth problems show a message instead of crashing** (small code change):
+   - `BleManager.scan()`: handle a missing adapter / Bluetooth off (`bluetoothAdapter?.isEnabled != true`) and `try/catch (SecurityException)` around `bluetoothLeScanner`/`startScan`. On failure: `ConnState.ERROR` + a plain-English `statusLine` ("Bluetooth is off. Turn it on and try again.").
+   - On Android ≤ 30: if Location is **switched off** (`LocationManager.isLocationEnabled`, API 28+), show "Location is off. Android 10 needs it on to find the watch." instead of scanning.
+   - `WatchViewModel` init: `ble.found.collectLatest { if (ble.connect(dev)) refreshAll() }` runs outside `op()`. Wrap it so a connect exception logs and resets state instead of crashing.
+   - Test ideas for the user: press Connect with Bluetooth off, and with Location off. The app should stay open and explain what to do.
+3. Tick the remaining Phase 0 boxes in `PLAN.md` and tell the user what to commit.
 
-### 3. Writes, one at a time (ask the user before each)
-1. **Sync time** (Watch tab). Writes opcode 0x09 with reason 1. Check the watch shows the right time.
-2. **Download steps** (commit=true). This *consumes* the hourly data on the watch. Check the numbers match the watch.
-3. Stop there. Settings/alarm/city writes are outside Phase 0. Just note whether the user wants them tested.
+## After Phase 0 (only when the user asks)
 
-### 4. Wrap up
-- Update `PLAN.md` Phase 0 checkboxes and the Open questions (does the protocol work on this watch? anything odd?). Record any new crash or `Err` the same way as the existing crash record.
-- Note the watch's Bluetooth address shown when connecting (`device.address` in logs, and the MAC shown in the app from opcode 0x10). Phase 2 needs to know whether it stays the same between connections.
-- Ask the user whether to commit the branch. Commit message ends with the attribution line from the system reminder, if present.
-- Report in plain English: what works, what doesn't, what's next (Phase 1 in `PLAN.md`).
+**Phase 1 groundwork** in `PLAN.md`:
+- move `BleManager`/`StepStore` to an app-scoped `TrrrstApp`
+- one shared sync routine
+- a build check that fails if INTERNET appears
+- a `SyncRecord` log
+
+Then the feature order is: Remember your watch → Background sync → CSV export/import → Clearer feedback → Stats → Glance widget → Automatic time zone. Health Connect was **dropped**.
