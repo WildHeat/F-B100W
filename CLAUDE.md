@@ -2,7 +2,7 @@
 
 TRRRST Watch: a FOSS, fully offline Android companion app for the **Casio F-B100W** (module 3589), talking to it over BLE. This repo is a **personal fork** (`origin` = WildHeat/F-B100W) of `taxmeifyoucan/trrrst-watch`, licensed AGPL-3.0. No upstream PRs are planned. Don't shape changes around upstream style.
 
-**Status (2026-11-17):** the app works on the user's Mi 8 (Android 10). Phases 0 and 1 are done and confirmed on the real watch: app-scoped `WatchRepository`, sync on connect (home city + time + steps), sync log, no-INTERNET build check. Watch quirks found in Phase 1 (the city gets forgotten, time is only accepted after a home city, the `1E` read limit) are recorded in PLAN.md under 1.2. Next is Phase 2 (Remember your watch), only when the user asks. **Start from [HANDOFF-phase2.md](HANDOFF-phase2.md).**
+**Status (2026-11-17):** the app works on the user's Mi 8 (Android 10). Phases 0 and 1 are done and confirmed on the real watch: app-scoped `WatchRepository`, sync on connect (home city + time + steps), sync log, no-INTERNET build check. Watch quirks found in Phase 1 (the city gets forgotten, time is only accepted after a home city, the `1E` read limit) are recorded in PLAN.md under 1.2. Phase 2 (Remember your watch) is built on branch `feat/remember-watch` and waiting for on-device testing (see PLAN Phase 2). Background: [HANDOFF-phase2.md](HANDOFF-phase2.md).
 
 The Mi 8 is reachable over adb at `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe` (not on PATH). Use `-s 52b2b2ca`, since an emulator is often running too. It's the user's personal phone, so only read logs and data for `dev.trrrst.watch` (`run-as dev.trrrst.watch cat shared_prefs/watch.xml` shows the remembered home city and the sync log). **The user installs builds (Android Studio ▶ Run) and commits themselves.** On MIUI, read crash traces with `adb shell dumpsys dropbox --print data_app_crash`, since they don't appear in logcat.
 
@@ -43,6 +43,7 @@ Single module `:app`, package `dev.trrrst.watch`, Kotlin + Jetpack Compose (Mate
 | `TrrrstApp.kt` | Application. Owns the app-scoped `BleManager`, `StepStore`, `SyncLogStore` and `WatchRepository`. |
 | `WatchRepository.kt` | App-scoped core. The only consumer of `ble.found` (connect → `sync()`), operation mutex (`exclusive {}`) + `busy`, city tables, remembered home city, `writeHomeCityAndTime`, `sync(trigger)` → `SyncResult` (never throws). |
 | `WatchViewModel.kt` | Screen state. Every button action goes through `op(label) { … }` → `repo.exclusive`. Calls `refreshAll()` (reads) when it sees `READY`. |
+| `WatchMatcher.kt` | Pure "is this my watch?" logic (`SavedWatch`, scan preference, connect verdict). Unit-tested. |
 | `HomeCity.kt`, `Sync.kt` | Pure logic: home-city choice, summer-time flag, `SyncResult`, plain-English `SyncMessages`. Unit-tested. |
 | `data/StepStore.kt` | Step history as `filesDir/steps.json`, merged by date (`yyyy-MM-dd`). `changes` flow for screens. |
 | `data/SyncLog.kt` | Last 10 `SyncRecord`s as JSON in prefs `watch`/`syncLog`. Pure `SyncLog` is unit-tested (test-only `org.json` dependency). |
@@ -51,7 +52,7 @@ Single module `:app`, package `dev.trrrst.watch`, Kotlin + Jetpack Compose (Mate
 
 Notes:
 - Connecting: the watch only advertises briefly after the user holds the bottom-left **C** button.
-- Every fresh connection runs `WatchRepository.sync()`: home city + summer time, then the time, then a **committing** step download (user decision). `refreshAll()` only reads. The watch ignores a bare time write when it has no home city, and a third `1E` read in a row errors (see PLAN 1.2).
+- Every fresh connection first checks it's the saved watch (`WatchRepository.isOurWatch`, a read only). A different watch triggers the "This isn't your saved watch" question, and nothing is written until the user accepts. Then it runs `WatchRepository.sync()`: home city + summer time, then the time, then a **committing** step download (user decision). `refreshAll()` only reads. The watch ignores a bare time write when it has no home city, and a third `1E` read in a row errors (see PLAN 1.2).
 - DST and city changes use the official transaction sequences (`OP_DST_TRANSACTION` types 1/2/3). Keep the order.
 - Target test phone: Xiaomi Mi 8, **Android 10 (API 29)**, MIUI. API-31+-only features (e.g. CompanionDeviceService presence) need a fallback that works on 29.
 

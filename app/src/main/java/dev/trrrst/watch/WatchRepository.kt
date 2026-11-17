@@ -1,5 +1,6 @@
 package dev.trrrst.watch
 
+import android.bluetooth.BluetoothDevice
 import android.content.Context
 import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.ble.Protocol
@@ -44,6 +45,15 @@ class WatchRepository(
     /** Result of the most recent [sync] in this app session. */
     val lastSync: StateFlow<SyncResult?> = _lastSync
 
+    private val _savedWatch = MutableStateFlow(loadSavedWatch())
+    /** The remembered watch (PLAN Phase 2), or null before the first connect / after Forget. */
+    val savedWatch: StateFlow<SavedWatch?> = _savedWatch
+
+    private val _pendingWatch = MutableStateFlow<SavedWatch?>(null)
+    /** A connected watch that isn't the saved one, waiting for the user to say whether
+     *  it's theirs. Nothing is written to it meanwhile. */
+    val pendingWatch: StateFlow<SavedWatch?> = _pendingWatch
+
     init {
         // The only consumer of scan results. It lives here (not in a ViewModel) so a
         // reopened screen can't pick up the last found device and reconnect by itself.
@@ -51,9 +61,10 @@ class WatchRepository(
             ble.found.collectLatest { dev ->
                 if (dev == null) return@collectLatest
                 try {
-                    // Every fresh connection syncs time + downloads steps (user decision,
-                    // PLAN 1.2). A screen reopening on an open connection does not.
-                    if (ble.connect(dev)) sync(SyncTrigger.MANUAL)
+                    // Every fresh connection to *our* watch syncs time + downloads steps
+                    // (user decision, PLAN 1.2). A screen reopening on an open connection
+                    // does not. The check must come first: sync writes to the watch.
+                    if (ble.connect(dev) && isOurWatch(dev)) sync(SyncTrigger.MANUAL)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -63,6 +74,79 @@ class WatchRepository(
                 }
             }
         }
+    }
+
+    // ---- the remembered watch (PLAN Phase 2)
+
+    private fun loadSavedWatch(): SavedWatch? {
+        val address = prefs.getString("savedAddress", null) ?: return null
+        return SavedWatch(
+            address, prefs.getString("savedName", null) ?: WATCH_NAME, prefs.getString("savedMac", null),
+        )
+    }
+
+    private fun rememberWatch(w: SavedWatch) {
+        prefs.edit()
+            .putString("savedAddress", w.address)
+            .putString("savedName", w.name)
+            .putString("savedMac", w.mac)
+            .apply()
+        _savedWatch.value = w
+    }
+
+    /** Forget the saved watch: the next F-B100W that connects is saved instead. */
+    fun forgetWatch() {
+        prefs.edit().remove("savedAddress").remove("savedName").remove("savedMac").apply()
+        _savedWatch.value = null
+        android.util.Log.d("Trrrst", "saved watch forgotten")
+    }
+
+    /** Runs right after connecting, before anything is written to the watch. Reads the
+     *  address the watch reports (a read only), then decides. Returns true if it's ours
+     *  (saving it when none was saved); false means the user is being asked. */
+    private suspend fun isOurWatch(dev: BluetoothDevice): Boolean = exclusive {
+        val address = dev.address
+        val mac = try {
+            Protocol.decodeBleFeatures(ble.read(Protocol.OP_BLE_FEATURES)).first
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            android.util.Log.w("Trrrst", "couldn't read the watch's own address", e)
+            null   // the decision uses the Bluetooth address; this is for the record
+        }
+        val name = try { dev.name } catch (e: SecurityException) { null } ?: WATCH_NAME
+        val saved = _savedWatch.value
+        val verdict = WatchMatcher.onConnected(saved, address)
+        // Logged on every connect to track whether the address stays the same (PLAN 2).
+        android.util.Log.d("Trrrst",
+            "connected to $address, watch reports $mac, saved ${saved?.address ?: "none"} -> $verdict")
+        val here = SavedWatch(address, name, mac)
+        when (verdict) {
+            WatchMatcher.Verdict.SAVE_AND_SYNC -> { rememberWatch(here); true }
+            WatchMatcher.Verdict.SYNC -> { if (here != saved) rememberWatch(here); true }
+            WatchMatcher.Verdict.ASK -> { _pendingWatch.value = here; false }
+        }
+    }
+
+    /** The user said the connected (different) watch is theirs: save it, then sync if
+     *  it's still connected. The watch may have hung up while the question was open. */
+    fun useThisWatch() {
+        val w = _pendingWatch.value ?: return
+        _pendingWatch.value = null
+        rememberWatch(w)
+        android.util.Log.d("Trrrst", "user chose watch ${w.address}")
+        val connected = ble.state.value == BleManager.ConnState.READY &&
+            ble.connectedAddress?.let { WatchMatcher.sameAddress(it, w.address) } == true
+        if (connected) scope.launch { sync(SyncTrigger.MANUAL) }
+        else ble.showStatus(WatchMatcher.SAVED_RECONNECT)
+    }
+
+    /** The user said the connected watch isn't theirs: disconnect without writing. */
+    fun rejectWatch() {
+        val w = _pendingWatch.value ?: return
+        _pendingWatch.value = null
+        android.util.Log.d("Trrrst", "user rejected watch ${w.address}")
+        ble.disconnect()
+        ble.fail(WatchMatcher.NOT_YOUR_WATCH)
     }
 
     private fun loadCities(name: String): List<City> {
@@ -179,3 +263,6 @@ class WatchRepository(
             }
         }
 }
+
+/** Name the watch advertises (and the fallback when Android can't tell us). */
+private const val WATCH_NAME = "CASIO F-B100W"

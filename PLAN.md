@@ -141,13 +141,19 @@ Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggeste
 
 Brief, pitfalls and test steps: [HANDOFF-phase2.md](HANDOFF-phase2.md). Known: the BLE address equals the MAC the watch reports in `OP_BLE_FEATURES`. It stays the same across reconnects but changes after a watch reset.
 
-- [ ] After the first successful connect, save the watch's address and name.
-- [ ] **Find out if the address is stable:** log the address on each connect for a few days. The app also reads the watch's MAC from `OP_BLE_FEATURES`; compare the two.
-  - Stable → connect directly with `getRemoteDevice(address)`, falling back to a scan filtered by that address.
-  - Changing → scan filtered by name, then confirm it's *your* watch by reading `OP_BLE_FEATURES` before doing anything else.
-- [ ] **No bonding** (`createBond`) unless Phase 0 shows it's safe.
-- [ ] Settings: show the remembered watch + **Forget this watch**.
-- [ ] Unit-test the "is this my watch?" decision.
+Branch `feat/remember-watch` (2026-11-17). Built, 37/37 tests, no INTERNET.
+
+**Tested on the Mi 8 (2026-11-17, 22:18–22:25, log + prefs):** first connect saved `D5:33:BC:22:F8:03` and synced. Reconnect → `SYNC` without asking. Forget → saved again by name. The user then **reset the watch**: its address became `E5:33:5A:41:F8:03`. The scan waited 5 s for the saved one, then connected → `ASK` with **no writes** before the answer → *Use this watch* → synced (London + time, 0 steps after reset), and prefs now hold the new address. One GATT client throughout, no crash. In all 4 connects the reported MAC equalled the BLE address. Connecting after the 5 s wait took ~12 s (normally ~1.5 s), likely because the wait used part of the advertising window. **Still untested: Cancel in the dialog, and Connect with Bluetooth off.**
+
+**Decision (user, 2026-11-17):** when a *different* F-B100W connects, **ask** ("This isn't your saved watch… Use this watch / Cancel"). Nothing is written to it until the user picks Use this watch.
+
+- [x] After the first successful connect, save the watch's address and name. Prefs `watch`: `savedAddress`, `savedName`, `savedMac` (`WatchRepository.isOurWatch`).
+- [x] **Find out if the address is stable:** stable across reconnects, changes on reset, and always equal to the MAC in `OP_BLE_FEATURES` (2026-11-17). The log line stays: every connect logs `Trrrst: connected to <address>, watch reports <mac>, saved <address> -> <verdict>`. Check this in the logs over a few days.
+  - Implemented: **one scan by name** that prefers the saved address. The saved watch is taken at once. Another F-B100W is only used if the saved one hasn't shown up 5 s later (`WatchMatcher.PREFER_SAVED_MS`). Not two scans in a row, because the watch only advertises briefly after C. No `getRemoteDevice` direct connect: the watch has to be advertising anyway.
+  - **Before the sync** (which writes), `isOurWatch` reads `OP_BLE_FEATURES` (read only) inside `exclusive {}` and decides. Different address → `pendingWatch` → dialog. Use this watch → save, then sync if still connected (else "Saved… hold C and press Connect"). Cancel / back → disconnect with "Not connected: this isn't your saved watch…".
+- [x] **No bonding** (`createBond`). `BleManager.pair()` is still unused.
+- [x] Settings: show the remembered watch + **Forget this watch** (with a confirmation). Visible without a connection.
+- [x] Unit-test the "is this my watch?" decision (`WatchMatcher`, `WatchMatcherTest`, 8 tests). Build-only, no device needed.
 
 ## Phase 3: Automatic background sync
 

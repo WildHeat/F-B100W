@@ -9,6 +9,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.location.LocationManager
 import android.os.Build
+import dev.trrrst.watch.WatchMatcher
 import androidx.core.location.LocationManagerCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -71,7 +72,20 @@ class BleManager(private val context: Context) {
         }
     }
 
-    fun scan(timeoutMs: Long = 90_000) {
+    /** Show a plain-English line on the screen without changing the connection state. */
+    fun showStatus(message: String) {
+        _statusLine.value = message
+    }
+
+    /** Address of the watch the last [connect] went to (null before the first one). */
+    val connectedAddress: String? get() = device?.address
+
+    /** Look for an F-B100W. With [savedAddress] (the remembered watch), that watch is
+     *  taken as soon as it's seen; another F-B100W is only used if the saved one hasn't
+     *  shown up [WatchMatcher.PREFER_SAVED_MS] after it (e.g. the watch was reset and
+     *  got a new address). Whether a connected watch is really ours is decided later,
+     *  before anything is written (WatchRepository). */
+    fun scan(savedAddress: String? = null, timeoutMs: Long = 90_000) {
         val adapter = bluetoothAdapter
         ScanCheck.problem(
             hasAdapter = adapter != null,
@@ -92,21 +106,50 @@ class BleManager(private val context: Context) {
         _found.value = null   // StateFlow drops re-emits of the same device: reset first
         _state.value = ConnState.SCANNING
         _statusLine.value = "scanning — press the button on the watch"
+        android.util.Log.d("TrrrstBLE", "scan started, saved watch ${savedAddress ?: "none"}")
+        // This search has handed a watch over (or given up); ignore later results.
+        var done = false
+        var backup: BluetoothDevice? = null
         val cb = object : ScanCallback() {
+            fun take(dev: BluetoothDevice) {
+                if (done) return
+                done = true
+                stopScanQuietly(scanner, this)
+                _found.value = dev
+            }
+
             override fun onScanResult(type: Int, r: ScanResult) {
+                if (done) return
                 val name = try {
                     r.device.name ?: r.scanRecord?.deviceName
                 } catch (e: SecurityException) {
                     r.scanRecord?.deviceName
                 } ?: return
-                if (name.startsWith("CASIO F-B100W")) {
-                    stopScanQuietly(scanner, this)
-                    _found.value = r.device
+                if (!name.startsWith("CASIO F-B100W")) return
+                val address = r.device.address
+                when (WatchMatcher.onScanResult(savedAddress, address)) {
+                    WatchMatcher.ScanPick.CONNECT_NOW -> {
+                        android.util.Log.d("TrrrstBLE", "scan: found $address")
+                        take(r.device)
+                    }
+                    WatchMatcher.ScanPick.BACKUP -> if (backup == null) {
+                        android.util.Log.d("TrrrstBLE",
+                            "scan: found $address, not the saved $savedAddress; still looking")
+                        backup = r.device
+                        scope.launch {
+                            delay(WatchMatcher.PREFER_SAVED_MS)
+                            if (!done && _state.value == ConnState.SCANNING) {
+                                android.util.Log.d("TrrrstBLE", "scan: saved watch not seen, using $address")
+                                take(r.device)
+                            }
+                        }
+                    }
                 }
             }
 
             override fun onScanFailed(code: Int) {
                 android.util.Log.w("TrrrstBLE", "scan failed, code=$code")
+                done = true
                 fail("Couldn't search for the watch. Turn Bluetooth off and on again, then try again.")
             }
         }
@@ -124,7 +167,8 @@ class BleManager(private val context: Context) {
         }
         scope.launch {
             delay(timeoutMs)
-            if (_state.value == ConnState.SCANNING) {
+            if (!done && _state.value == ConnState.SCANNING) {
+                done = true
                 stopScanQuietly(scanner, cb)
                 _state.value = ConnState.DISCONNECTED
                 _statusLine.value = "watch not found"

@@ -29,7 +29,15 @@ fun SettingsScreen(vm: WatchViewModel) {
     val prof = vm.profile
     val timer = vm.timerRaw
     if (b == null || bs == null || prof == null || timer == null) {
-        Box(Modifier.fillMaxSize().wrapContentSize()) { Text("Connect to the watch first") }
+        // The remembered watch can be seen and forgotten without a connection.
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            YourWatchSection(vm)
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Connect to the watch to change its settings.")
+        }
         return
     }
 
@@ -51,6 +59,8 @@ fun SettingsScreen(vm: WatchViewModel) {
         verticalArrangement = Arrangement.spacedBy(4.dp),
         contentPadding = PaddingValues(vertical = 10.dp)
     ) {
+        item { YourWatchSection(vm) }
+        item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         item { Text("Connected watch info", style = MaterialTheme.typography.titleSmall) }
         item {
             Card {
@@ -143,6 +153,41 @@ fun SettingsScreen(vm: WatchViewModel) {
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         item { Text("Appearance", style = MaterialTheme.typography.titleSmall) }
         item { AccentColorPicker(vm) }
+    }
+}
+
+/** The remembered watch (PLAN Phase 2) and the Forget button. */
+@Composable
+private fun YourWatchSection(vm: WatchViewModel) {
+    val saved = vm.savedWatch
+    var confirm by remember { mutableStateOf(false) }
+    Text("Your watch", style = MaterialTheme.typography.titleSmall)
+    Card {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (saved == null) {
+                Text("No watch saved yet. Connect once to save it.")
+            } else {
+                Text(saved.name, style = MaterialTheme.typography.bodyLarge)
+                Text("Address ${saved.address}", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "The app only syncs with this watch. If you reset the watch or switch to " +
+                        "another one, forget it here (or confirm the new watch when asked).",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(onClick = { confirm = true }) { Text("Forget this watch") }
+            }
+        }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Forget this watch?") },
+            text = { Text("The app will connect to the next F-B100W it finds and remember that one instead.") },
+            confirmButton = {
+                TextButton(onClick = { confirm = false; vm.forgetWatch() }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
+        )
     }
 }
 
