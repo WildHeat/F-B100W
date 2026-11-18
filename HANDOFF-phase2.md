@@ -4,6 +4,8 @@ Self-contained brief for a new session. Read this, then [CLAUDE.md](CLAUDE.md) (
 
 Last updated: 2026-11-17.
 
+> **Superseded:** Phase 2 is built and confirmed on the watch (see PLAN.md Phase 2). For the next step, read [HANDOFF-phase3.md](HANDOFF-phase3.md). This file is kept for reference.
+
 ## Where things stand
 
 **Phases 0 and 1 are done**, merged to `master` (PRs #1–#7). Everything below is confirmed on the user's Xiaomi Mi 8 (Android 10) with their Casio F-B100W. 29/29 unit tests pass, and there's no INTERNET permission. A build check enforces that (`check<Variant>NoNetworkPermissions` in `app/build.gradle.kts`).

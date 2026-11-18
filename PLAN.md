@@ -141,7 +141,7 @@ Brief, pitfalls and test steps: [HANDOFF-phase1.md](HANDOFF-phase1.md). Suggeste
 
 Brief, pitfalls and test steps: [HANDOFF-phase2.md](HANDOFF-phase2.md). Known: the BLE address equals the MAC the watch reports in `OP_BLE_FEATURES`. It stays the same across reconnects but changes after a watch reset.
 
-Branch `feat/remember-watch` (2026-11-17). Built, 37/37 tests, no INTERNET.
+Branch `feat/remember-watch`, merged in PR #9 (2026-11-17). 37/37 tests, no INTERNET.
 
 **Tested on the Mi 8 (2026-11-17, 22:18–22:25, log + prefs):** first connect saved `D5:33:BC:22:F8:03` and synced. Reconnect → `SYNC` without asking. Forget → saved again by name. The user then **reset the watch**: its address became `E5:33:5A:41:F8:03`. The scan waited 5 s for the saved one, then connected → `ASK` with **no writes** before the answer → *Use this watch* → synced (London + time, 0 steps after reset), and prefs now hold the new address. One GATT client throughout, no crash. In all 4 connects the reported MAC equalled the BLE address. Connecting after the 5 s wait took ~12 s (normally ~1.5 s), likely because the wait used part of the advertising window. **Still untested: Cancel in the dialog, and Connect with Bluetooth off.**
 
@@ -156,6 +156,8 @@ Branch `feat/remember-watch` (2026-11-17). Built, 37/37 tests, no INTERNET.
 - [x] Unit-test the "is this my watch?" decision (`WatchMatcher`, `WatchMatcherTest`, 8 tests). Build-only, no device needed.
 
 ## Phase 3: Automatic background sync
+
+Brief, pitfalls and test steps: [HANDOFF-phase3.md](HANDOFF-phase3.md). Background sync must only sync the **saved** watch and never ask (no user to answer).
 
 - [ ] `SyncService` foreground service (type `connectedDevice`) with a quiet notification channel.
 - [ ] Permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE`, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, `SCHEDULE_EXACT_ALARM`. **No INTERNET.**
@@ -211,5 +213,5 @@ Branch `feat/remember-watch` (2026-11-17). Built, 37/37 tests, no INTERNET.
 
 1. ~~**Crash cause**~~: confirmed (missing `BLUETOOTH`/`BLUETOOTH_ADMIN`). See Phase 0 crash record.
 2. ~~**Does the protocol work on this watch at all?**~~ Yes: reads and writes confirmed (2026-11-17). Step download confirmed too.
-3. **Address stability:** stable across reconnects, but changes after a watch reset (see Phase 0). Phase 2 still needs to handle the change.
+3. ~~**Address stability**~~: stable across reconnects, changes after a watch reset, and always equal to the reported MAC. Phase 2 handles the change (asks the user).
 4. **Auto-sync reconnect sequence:** no captures possible. Phase 3 measures it.
