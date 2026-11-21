@@ -1,5 +1,7 @@
 # Handoff: Phase 3 (Automatic background sync)
 
+> **Superseded (2026-11-21):** use [HANDOFF-phase3-part2.md](HANDOFF-phase3-part2.md). This file is kept for reference only.
+
 Self-contained brief for a new session. Read this, then [CLAUDE.md](CLAUDE.md) (project rules) and [PLAN.md](PLAN.md) (roadmap, status, and the full record of watch findings). You don't need any earlier chat history. Older handoffs ([phase 0](HANDOFF-phase0.md), [phase 1](HANDOFF-phase1.md), [phase 2](HANDOFF-phase2.md)) are for reference only.
 
 Last updated: 2026-11-18.
