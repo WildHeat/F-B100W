@@ -2,7 +2,7 @@
 
 TRRRST Watch: a FOSS, fully offline Android companion app for the **Casio F-B100W** (module 3589), talking to it over BLE. This repo is a **personal fork** (`origin` = WildHeat/F-B100W) of `taxmeifyoucan/trrrst-watch`, licensed AGPL-3.0. No upstream PRs are planned. Don't shape changes around upstream style.
 
-**Status (2026-11-18):** the app works on the user's Mi 8 (Android 10). Phases 0 and 1 are done and merged. Phase 2 (Remember your watch) is merged (PR #9) and confirmed on the real watch, including a watch reset. Only *Cancel* in the not-your-watch dialog and Connect with Bluetooth off are still untested. Watch quirks are recorded in PLAN.md (Phase 1.2 and Phase 2). Next is Phase 3 (Automatic background sync), only when the user asks: plan first, get approval, then build. **Start from [HANDOFF-phase3.md](HANDOFF-phase3.md).**
+**Status (2026-11-21):** the app works on the user's Mi 8 (Android 10). Phases 0–2 are done and merged. Phase 3 is in progress: the listening test (PR #11) and Part 1, registering the app on the watch so D / time sync works (PR #12, confirmed on the watch), are merged. **Next: Part 2 (reliable wake-ups) and Part 3 (overnight check), both already approved by the user. Start from [HANDOFF-phase3-part2.md](HANDOFF-phase3-part2.md).** Watch quirks and Phase 3 results are recorded in PLAN.md.
 
 The Mi 8 is reachable over adb at `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe` (not on PATH). Use `-s 52b2b2ca`, since an emulator is often running too. It's the user's personal phone, so only read logs and data for `dev.trrrst.watch` (`run-as dev.trrrst.watch cat shared_prefs/watch.xml` shows the remembered home city, the saved watch and the sync log). **The user installs builds (Android Studio ▶ Run) and commits themselves.** On MIUI, read crash traces with `adb shell dumpsys dropbox --print data_app_crash`, since they don't appear in logcat.
 
@@ -48,7 +48,7 @@ Single module `:app`, package `dev.trrrst.watch`, Kotlin + Jetpack Compose (Mate
 | `HomeCity.kt`, `Sync.kt` | Pure logic: home-city choice, summer-time flag, `SyncResult`, plain-English `SyncMessages`. Unit-tested. |
 | `data/StepStore.kt` | Step history as `filesDir/steps.json`, merged by date (`yyyy-MM-dd`). `changes` flow for screens. |
 | `data/SyncLog.kt` | Last 10 `SyncRecord`s as JSON in prefs `watch`/`syncLog`. Pure `SyncLog` is unit-tested (test-only `org.json` dependency). |
-| `listen/*.kt` | Phase 3 step 1 listening test: `ListenSchedule` + `AdvertTracker` + `LogTrim` (pure, tested), `ListenScheduler` (prefs + alarm + receiver), `ListenService` (foreground service, one read-only connect), `ListenLog` (`files/listen.log`). |
+| `listen/*.kt` | Phase 3 listening test: `ListenSchedule` + `AdvertTracker` + `LogTrim` (pure, tested), `ListenScheduler` (prefs + alarm + receiver), `ListenService` (foreground service, one read-only connect, logs the connection reason), `ListenLog` (`files/listen.log`), `PairTest` (the only place pairing is allowed). |
 | `ui/*.kt` | Compose screens: Watch (home), Alarms, World, Settings, plus the history chart and theme. |
 | `assets/cities_ht.json`, `cities_wt.json` | Home/world city tables (`no, name, tz, dst, rule`). |
 
