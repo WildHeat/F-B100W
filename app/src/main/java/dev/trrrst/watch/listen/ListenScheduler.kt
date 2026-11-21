@@ -44,13 +44,17 @@ object ListenScheduler {
 
     private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun status(ctx: Context): Status {
+    /** [notBefore] (ms): plan from then instead of now, so a window that just ended
+     *  (or ended early) isn't picked again. */
+    fun status(ctx: Context, notBefore: Long = 0L): Status {
         val p = prefs(ctx)
         val testOn = p.getBoolean(KEY_TEST, false)
         val autoOn = if (p.contains(KEY_AUTO_ON)) p.getBoolean(KEY_AUTO_ON, false) else null
         val h = p.getInt(KEY_HOUR, 8)
         val m = p.getInt(KEY_MINUTE, 0)
-        val next = if (testOn) ListenSchedule.next(ZonedDateTime.now(), ListenSchedule.times(autoOn, h, m)) else null
+        val from = maxOf(System.currentTimeMillis(), notBefore)
+        val fromTime = Instant.ofEpochMilli(from).atZone(ZoneId.systemDefault())
+        val next = if (testOn) ListenSchedule.next(fromTime, ListenSchedule.times(autoOn, h, m)) else null
         return Status(testOn, autoOn, h, m, next)
     }
 
@@ -73,11 +77,11 @@ object ListenScheduler {
     }
 
     /** Set (or cancel) the alarm for the next listening window. Safe to call often. */
-    fun schedule(ctx: Context): ListenSchedule.Window? {
+    fun schedule(ctx: Context, notBefore: Long = 0L): ListenSchedule.Window? {
         val app = ctx.applicationContext
         val am = app.getSystemService(AlarmManager::class.java)
         val p = prefs(app)
-        val st = status(app)
+        val st = status(app, notBefore)
         val w = st.next
         if (w == null) {
             am.cancel(alarmIntent(app, null))

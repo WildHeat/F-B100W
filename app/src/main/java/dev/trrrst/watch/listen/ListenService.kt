@@ -90,7 +90,9 @@ class ListenService : Service() {
                 log.add("listening test failed: $e")
             } finally {
                 finished = true
-                ListenScheduler.schedule(this@ListenService)
+                // Plan the next window *after* this one, even if this run ended early
+                // (e.g. Bluetooth off). Otherwise it restarts the same window every 5 s.
+                ListenScheduler.schedule(this@ListenService, notBefore = end)
                 ServiceCompat.stopForeground(this@ListenService, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -166,6 +168,8 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
 
         val tracker = AdvertTracker { clock(it) }
         var probe: Job? = null
+        var probeDone = false
+        var nextProbeAt = 0L
         val stateLog = launch {
             var prev = ble.state.value
             ble.state.collect {
@@ -188,8 +192,16 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
                     System.currentTimeMillis(), address, name, r.rssi, r.isConnectable,
                     r.scanRecord?.bytes?.let { advertHex(it) } ?: "",
                 ).forEach(log::add)
-                if (probe == null && saved != null && WatchMatcher.sameAddress(saved.address, address)) {
-                    probe = launch { probe(r.device) }
+                // One test connection per window. If the app was using the watch, try
+                // again on a later advert (at most every 5 s) instead of giving up.
+                val t = System.currentTimeMillis()
+                if (!probeDone && probe?.isActive != true && t >= nextProbeAt &&
+                    saved != null && WatchMatcher.sameAddress(saved.address, address)
+                ) {
+                    probe = launch {
+                        if (probe(r.device)) probeDone = true
+                        else nextProbeAt = System.currentTimeMillis() + 5_000
+                    }
                 }
             },
             onFailed = { log.add("couldn't listen: $it") },
@@ -225,13 +237,15 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
 
     /** Connect to the saved watch, note anything it sends by itself, do one read, hang
      *  up. Nothing is written to the watch (apart from the standard Bluetooth
-     *  "send me notifications" switch that every connect sets). */
-    private suspend fun probe(dev: BluetoothDevice) {
+     *  "send me notifications" switch that every connect sets). Returns false if it
+     *  didn't try because the app was using the watch (the caller retries later). */
+    private suspend fun probe(dev: BluetoothDevice): Boolean {
         val inUse = repo.busy.value || ble.state.value !in setOf(ConnState.DISCONNECTED, ConnState.ERROR)
         if (inUse) {
-            probeResult = "not tried: the app was using the watch (${ble.state.value.name.lowercase()})"
-            log.add(probeResult)
-            return
+            val msg = "not tried yet: the app was using the watch (${ble.state.value.name.lowercase()})"
+            if (msg != probeResult) log.add(msg)   // log once, not on every retry
+            probeResult = msg
+            return false
         }
         var attempted = false
         try {
@@ -250,7 +264,8 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
                 log.add("connected and ready after ${secs()}")
                 // Read once at once and once after the wait: does waiting change the answer?
                 try {
-                    log.add("read 10 at once -> ${ble.read(Protocol.OP_BLE_FEATURES).hex()}")
+                    val f0 = ble.read(Protocol.OP_BLE_FEATURES)
+                    log.add("read 10 at once -> ${f0.hex()} (reason: ${Protocol.connectReason(f0).label})")
                 } catch (e: Exception) {
                     currentCoroutineContext().ensureActive()
                     log.add("read 10 at once failed: ${e.message}")
@@ -279,7 +294,10 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
                     log.add("read 10 failed: ${e.message}")
                     null
                 }
-                f?.let { log.add("read 10 -> ${it.hex()} (watch reports ${Protocol.decodeBleFeatures(it).first})") }
+                f?.let {
+                    log.add("read 10 -> ${it.hex()} (watch reports ${Protocol.decodeBleFeatures(it).first}, " +
+                        "reason: ${Protocol.connectReason(it).label})")
+                }
                 probeResult = "connected after the scan in ${secs()}; the watch sent $heard message(s) by itself; " +
                     "the read ${if (f != null) "worked" else "failed"}"
                 log.add(probeResult)
@@ -298,6 +316,7 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
             }
             repo.testOwnsConnection = false
         }
+        return true
     }
 
     private fun screenOn() = ctx.getSystemService(PowerManager::class.java).isInteractive

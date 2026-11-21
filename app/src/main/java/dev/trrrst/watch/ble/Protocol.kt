@@ -242,6 +242,41 @@ object Protocol {
         return Pair(mac, b[8].toInt() and 0xFF)
     }
 
+    // ---- 0x10 connection reason (byte 8): why the watch connected.
+    // Same position and values in izivkov/gshock_api (button_pressed_io.py, lists the
+    // F-B100W) and Gadgetbridge (CasioConstants: CONNECT_CNCT/FIND/AUTO/TIME). Our watch
+    // reported 0 ("reset") on every connect while its app info was unregistered.
+    enum class ConnectReason(val code: Int, val label: String) {
+        RESET(0, "reset (no app registered)"),
+        C_BUTTON(1, "C button"),
+        FIND_PHONE(2, "find phone"),
+        AUTO_SYNC(3, "automatic sync"),
+        D_BUTTON(4, "D button"),
+        UNKNOWN(-1, "unknown"),
+    }
+
+    fun connectReason(bleFeatures: ByteArray): ConnectReason {
+        if (bleFeatures.size < 19 || bleFeatures[0] != OP_BLE_FEATURES) return ConnectReason.UNKNOWN
+        val code = bleFeatures[8].toInt() and 0xFF
+        return ConnectReason.entries.firstOrNull { it.code == code } ?: ConnectReason.UNKNOWN
+    }
+
+    // ---- 0x22 app info: which phone app the watch belongs to. A reset (or never
+    // registered) watch answers all FF, and then ignores D (time sync request).
+    // izivkov/gshock_api (app_info_io.py) answers that state with this fixed value,
+    // matching the official app. Approved by the user (2026-11-21): written once, and
+    // only when the watch answers exactly APP_INFO_UNREGISTERED.
+    val APP_INFO_UNREGISTERED: ByteArray = byteArrayOf(
+        OP_APP_INFO, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0x00,
+    )
+    val APP_INFO_REGISTER: ByteArray = byteArrayOf(
+        OP_APP_INFO, 0x34, 0x88.toByte(), 0xF4.toByte(), 0xE5.toByte(), 0xD5.toByte(),
+        0xAF.toByte(), 0xC8.toByte(), 0x29, 0xE0.toByte(), 0x6D, 0x02,
+    )
+
+    /** True only for the exact "no app registered" answer; anything else is left alone. */
+    fun appInfoNeedsRegister(answer: ByteArray): Boolean = answer.contentEquals(APP_INFO_UNREGISTERED)
+
     fun decodeVersion(b: ByteArray): String =
         "DST data ${b[1]}.${b[2]} · watch firmware ${b[3]}.${b[4]} · BLE firmware 0x${(b[13].toInt() and 0xFF).toString(16)}"
 
