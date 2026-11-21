@@ -18,6 +18,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.trrrst.watch.WatchViewModel
+import dev.trrrst.watch.ble.BleManager
+import dev.trrrst.watch.listen.ListenScheduler
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 private val PERIODS = listOf(3, 5, 10, 60, 90, 120)
 
@@ -35,6 +39,8 @@ fun SettingsScreen(vm: WatchViewModel) {
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             YourWatchSection(vm)
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            ListenTestSection(vm)
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("Connect to the watch to change its settings.")
         }
@@ -60,6 +66,8 @@ fun SettingsScreen(vm: WatchViewModel) {
         contentPadding = PaddingValues(vertical = 10.dp)
     ) {
         item { YourWatchSection(vm) }
+        item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
+        item { ListenTestSection(vm) }
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         item { Text("Connected watch info", style = MaterialTheme.typography.titleSmall) }
         item {
@@ -189,6 +197,66 @@ private fun YourWatchSection(vm: WatchViewModel) {
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
         )
     }
+}
+
+/** Switch for the background listening test (PLAN Phase 3, step 1). */
+@Composable
+private fun ListenTestSection(vm: WatchViewModel) {
+    val st = vm.listenStatus
+    Text("Background test", style = MaterialTheme.typography.titleSmall)
+    Card {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Listen when the watch syncs", Modifier.weight(1f))
+                Switch(checked = st.testOn, onCheckedChange = { vm.setListenTest(it) })
+            }
+            Text(
+                "Test only. Around the watch's sync times (about 00:30, 06:30, 12:30 and 18:30 " +
+                    "according to Casio's manual, plus the auto time sync time if it's on), the phone " +
+                    "listens for your watch for 30 minutes, connects once to read its address, and " +
+                    "notes what happened. Nothing on the watch is changed. The watch may show Err " +
+                    "afterwards, which is harmless.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(listenStatusText(st, vm.savedWatch != null), style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = { vm.listenNow() }) { Text("Listen now for 5 minutes") }
+            Text(
+                "Then press D on the watch (in normal time mode, phone within 1 m) to make it sync now.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            Text("Paired with this phone: ${vm.pairedText()}", style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(
+                onClick = { vm.pairTest() },
+                enabled = vm.connState == BleManager.ConnState.READY && !vm.busy,
+            ) { Text("Pair with this watch (test)") }
+            Text(
+                "Casio's manual says the watch only asks a paired phone for the time. Connect first, " +
+                    "then pair; if Android asks, tap Pair. To undo: unpair the watch in the phone's " +
+                    "Bluetooth settings, and on the watch hold C 1 s, hold A 2 s, press C twice, then " +
+                    "hold B 2 s until CLR stops flashing.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (vm.pairMessage.isNotEmpty()) Text(vm.pairMessage, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+private fun listenStatusText(st: ListenScheduler.Status, hasSavedWatch: Boolean): String {
+    val main = when {
+        !st.testOn -> "Off."
+        else -> st.next?.let {
+            val day = when (it.start.toLocalDate()) {
+                LocalDate.now() -> "today"
+                LocalDate.now().plusDays(1) -> "tomorrow"
+                else -> it.start.toLocalDate().toString()
+            }
+            val fmt = DateTimeFormatter.ofPattern("HH:mm")
+            "Next listening: $day ${it.start.format(fmt)} to ${it.end.format(fmt)} (watch sync at ${it.label})."
+        } ?: "On."
+    }
+    return if (hasSavedWatch) main
+    else "$main No watch saved yet: connect once so the test can try connecting to it."
 }
 
 @Composable

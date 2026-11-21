@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.ble.Protocol
 import dev.trrrst.watch.data.StepStore
+import dev.trrrst.watch.listen.ListenScheduler
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -57,6 +58,43 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     var dstState by mutableStateOf<Protocol.DstState?>(null)
     var dstSettings by mutableStateOf<Map<Int, Protocol.DstSetting>>(emptyMap())
 
+    /** Background listening test (PLAN Phase 3, step 1): switch, known auto-sync time, next run. */
+    var listenStatus by mutableStateOf(ListenScheduler.status(app))
+        private set
+
+    fun setListenTest(on: Boolean) {
+        ListenScheduler.setTestOn(getApplication(), on)
+        listenStatus = ListenScheduler.status(getApplication())
+    }
+
+    /** Result of the last pairing test, for the screen (empty before the first). */
+    var pairMessage by mutableStateOf("")
+        private set
+
+    /** Is this phone paired with the saved watch? "yes", "no", "pairing" or "unknown". */
+    fun pairedText(): String = savedWatch?.let {
+        dev.trrrst.watch.listen.PairTest.bondName(ble.bondState(it.address))
+    } ?: "no watch saved"
+
+    /** Pairing test (PLAN Phase 3, step 1b): pair the phone with the connected watch. */
+    fun pairTest() {
+        pairMessage = "Pairing… if Android asks, tap Pair."
+        viewModelScope.launch {
+            pairMessage = dev.trrrst.watch.listen.PairTest.run(getApplication())
+        }
+    }
+
+    /** Listen for 5 minutes right away, while the user presses D on the watch. */
+    fun listenNow() {
+        ListenScheduler.listenNow(getApplication())
+    }
+
+    /** The app is closed at the watch's auto-sync time, so keep that time on the phone. */
+    private fun learnAutoSync(bs: Protocol.BleSettings) {
+        ListenScheduler.rememberAutoSync(getApplication(), bs)
+        listenStatus = ListenScheduler.status(getApplication())
+    }
+
     val homeCities: List<City> get() = repo.homeCities
     val worldCities: List<City> get() = repo.worldCities
 
@@ -66,6 +104,8 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun savedDstMode(): Int = repo.homeDstMode()
 
     init {
+        // Re-arm the listening test's alarm (e.g. after the phone restarted).
+        ListenScheduler.schedule(app)
         viewModelScope.launch {
             // Load the watch state whenever this screen sees the connection become
             // ready. A new ViewModel on an already-open connection sees READY first,
@@ -74,7 +114,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             ble.state.collect {
                 connState = it
                 val ready = it == BleManager.ConnState.READY
-                if (ready && !wasReady) refreshAll()
+                if (ready && !wasReady && !repo.testOwnsConnection) refreshAll()
                 wasReady = ready
             }
         }
@@ -188,6 +228,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 hourlyChime = (alarms!![0].rawFlags and 0x80) != 0
                 basic = Protocol.Basic.decode(ble.read(Protocol.OP_BASIC))
                 bleSettings = Protocol.BleSettings(ble.read(Protocol.OP_BLE_SETTINGS))
+                    .also { learnAutoSync(it) }
                 profile = Protocol.Profile.decode(ble.read(Protocol.OP_EXERCISE))
                 timerRaw = ble.read(Protocol.OP_TIMER)
                 dstState = Protocol.DstState.decode(ble.read(Protocol.OP_DST_STATE))
@@ -265,6 +306,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 val current = Protocol.BleSettings(ble.read(Protocol.OP_BLE_SETTINGS))
                 ble.write(current.withAutoSync(hour, minute, enabled))
                 bleSettings = Protocol.BleSettings(ble.read(Protocol.OP_BLE_SETTINGS))
+                    .also { learnAutoSync(it) }
                 log("auto-sync saved")
             }
         }
@@ -276,6 +318,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 val current = Protocol.BleSettings(ble.read(Protocol.OP_BLE_SETTINGS))
                 ble.write(current.withPeriod(minutes))
                 bleSettings = Protocol.BleSettings(ble.read(Protocol.OP_BLE_SETTINGS))
+                    .also { learnAutoSync(it) }
                 log("connection time saved")
             }
         }

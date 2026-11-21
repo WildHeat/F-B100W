@@ -13,7 +13,7 @@ The Mi 8 is reachable over adb at `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb
 
 - **Never add the `INTERNET` permission** (or `ACCESS_NETWORK_STATE`), directly or through a dependency. After adding any library, check the merged manifest: `app/build/intermediates/merged_manifest/debug/.../AndroidManifest.xml`.
 - **Don't add dependencies lightly.** No Google Play Services, Firebase, analytics or proprietary SDKs. Approved: Jetpack Glance (widget). Health Connect was considered and dropped.
-- **Don't call `createBond()`/pairing.** It has never been tested on this watch, and connecting works fine without it.
+- **Pairing (`createBond()`) only through the pairing test** (`listen/PairTest`, Settings → Background test), which the user approved on 2026-11-18 because the watch's time-sync request (D button, scheduled syncs) seems to need a paired phone. Don't pair anywhere else, and don't make normal connecting depend on it. Undo: unpair in the phone's Bluetooth settings + clear it on the watch (hold C 1 s, hold A 2 s, press C twice, hold B 2 s until CLR stops flashing).
 - **Always `close()` a `BluetoothGatt` when it disconnects.** Leftover clients get revived by Android and break the next connection (see the PLAN Phase 0 bug record).
 - **Don't change BLE byte layouts in `Protocol.kt` by guesswork.** Layouts were confirmed against captures. Anything new needs a captured hex fixture and a test in `ProtocolTest`. Bad writes can soft-brick the watch (see README). Never write to watch memory/firmware areas.
 - **Watch writes are read-modify-write.** Read the current value, change only the managed bits, write it back (see `saveBasic`, `saveAlarms`, `BleSettings.with*`). Keep it that way.
@@ -47,6 +47,7 @@ Single module `:app`, package `dev.trrrst.watch`, Kotlin + Jetpack Compose (Mate
 | `HomeCity.kt`, `Sync.kt` | Pure logic: home-city choice, summer-time flag, `SyncResult`, plain-English `SyncMessages`. Unit-tested. |
 | `data/StepStore.kt` | Step history as `filesDir/steps.json`, merged by date (`yyyy-MM-dd`). `changes` flow for screens. |
 | `data/SyncLog.kt` | Last 10 `SyncRecord`s as JSON in prefs `watch`/`syncLog`. Pure `SyncLog` is unit-tested (test-only `org.json` dependency). |
+| `listen/*.kt` | Phase 3 step 1 listening test: `ListenSchedule` + `AdvertTracker` + `LogTrim` (pure, tested), `ListenScheduler` (prefs + alarm + receiver), `ListenService` (foreground service, one read-only connect), `ListenLog` (`files/listen.log`). |
 | `ui/*.kt` | Compose screens: Watch (home), Alarms, World, Settings, plus the history chart and theme. |
 | `assets/cities_ht.json`, `cities_wt.json` | Home/world city tables (`no, name, tz, dst, rule`). |
 
