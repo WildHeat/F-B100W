@@ -2,7 +2,9 @@ package dev.trrrst.watch.ble
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProtocolTest {
@@ -110,5 +112,46 @@ class ProtocolTest {
         assertEquals(true, state.homeAuto)
         assertEquals(true, state.homeDstOn)
         assertArrayEquals(captured, state.encode())
+    }
+
+    // Captured on our F-B100W (2026-11-18 03:02, listen.log), before and after bonding.
+    private val capturedUnregisteredAppInfo = "22ffffffffffffffffffff00"
+
+    @Test
+    fun unregisteredAppInfoIsRecognised() {
+        assertTrue(Protocol.appInfoNeedsRegister(hex(capturedUnregisteredAppInfo)))
+        assertArrayEquals(hex(capturedUnregisteredAppInfo), Protocol.APP_INFO_UNREGISTERED)
+    }
+
+    @Test
+    fun anythingElseIsLeftAlone() {
+        assertFalse(Protocol.appInfoNeedsRegister(Protocol.APP_INFO_REGISTER))
+        assertFalse(Protocol.appInfoNeedsRegister(hex("22ffffffffffffffffffff02")))  // last byte differs
+        assertFalse(Protocol.appInfoNeedsRegister(hex("22ffffffffffffffffff00")))    // too short
+        assertFalse(Protocol.appInfoNeedsRegister(hex("22ffffffffffffffffffff0000"))) // too long
+        assertFalse(Protocol.appInfoNeedsRegister(hex("23ffffffffffffffffffff00")))  // other opcode
+    }
+
+    @Test
+    fun registrationMatchesGshockApi() {
+        // izivkov/gshock_api src/gshock_api/iolib/app_info_io.py: header 0x22, payload
+        // 3488F4E5D5AFC829E06D, trailer 0x02.
+        assertArrayEquals(hex("223488f4e5d5afc829e06d02"), Protocol.APP_INFO_REGISTER)
+        assertEquals(Protocol.APP_INFO_UNREGISTERED.size, Protocol.APP_INFO_REGISTER.size)
+    }
+
+    @Test
+    fun connectReasonFromCapturedFeatures() {
+        // Captured 2026-11-18 02:20 (C held, app info unregistered): byte 8 = 0.
+        val captured = hex("1003f8415a33e57f00030fffffffff26000000")
+        assertEquals("E5:33:5A:41:F8:03", Protocol.decodeBleFeatures(captured).first)
+        assertEquals(Protocol.ConnectReason.RESET, Protocol.connectReason(captured))
+        fun withReason(code: Int) = captured.copyOf().also { it[8] = code.toByte() }
+        assertEquals(Protocol.ConnectReason.C_BUTTON, Protocol.connectReason(withReason(1)))
+        assertEquals(Protocol.ConnectReason.FIND_PHONE, Protocol.connectReason(withReason(2)))
+        assertEquals(Protocol.ConnectReason.AUTO_SYNC, Protocol.connectReason(withReason(3)))
+        assertEquals(Protocol.ConnectReason.D_BUTTON, Protocol.connectReason(withReason(4)))
+        assertEquals(Protocol.ConnectReason.UNKNOWN, Protocol.connectReason(withReason(99)))
+        assertEquals(Protocol.ConnectReason.UNKNOWN, Protocol.connectReason(captured.copyOf(10)))
     }
 }

@@ -9,6 +9,7 @@ import dev.trrrst.watch.ble.WATCH_NAME
 import dev.trrrst.watch.data.StepStore
 import dev.trrrst.watch.data.SyncLogStore
 import dev.trrrst.watch.data.SyncRecord
+import dev.trrrst.watch.listen.ListenLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -111,19 +112,23 @@ class WatchRepository(
      *  (saving it when none was saved); false means the user is being asked. */
     private suspend fun isOurWatch(dev: BluetoothDevice): Boolean = exclusive {
         val address = dev.address
-        val mac = try {
-            Protocol.decodeBleFeatures(ble.read(Protocol.OP_BLE_FEATURES)).first
+        val features = try {
+            ble.read(Protocol.OP_BLE_FEATURES)
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             android.util.Log.w("Trrrst", "couldn't read the watch's own address", e)
             null   // the decision uses the Bluetooth address; this is for the record
         }
+        val mac = features?.let { Protocol.decodeBleFeatures(it).first }
+        val reason = features?.let { Protocol.connectReason(it).label } ?: "unknown"
         val name = try { dev.name } catch (e: SecurityException) { null } ?: WATCH_NAME
         val saved = _savedWatch.value
         val verdict = WatchMatcher.onConnected(saved, address)
         // Logged on every connect to track whether the address stays the same (PLAN 2).
         android.util.Log.d("Trrrst",
-            "connected to $address, watch reports $mac, saved ${saved?.address ?: "none"} -> $verdict")
+            "connected to $address, watch reports $mac (reason: $reason), saved ${saved?.address ?: "none"} -> $verdict")
+        ListenLog(app).add(
+            "app connected to $address (reason: $reason, status ${features?.hex() ?: "unread"}) -> $verdict")
         val here = SavedWatch(address, name, mac)
         when (verdict) {
             WatchMatcher.Verdict.SAVE_AND_SYNC -> { rememberWatch(here); true }
@@ -225,6 +230,8 @@ class WatchRepository(
             SyncResult(false, error = SyncMessages.NOT_CONNECTED)
         } else try {
             exclusive {
+                // Only reached for the saved watch (after isOurWatch / useThisWatch).
+                registerAppIfNeeded()
                 // The watch ignores a bare time write, so the time goes with the home city.
                 // If that part fails, still download the steps.
                 val city = homeCity()
@@ -255,6 +262,34 @@ class WatchRepository(
         syncLog.add(SyncRecord(System.currentTimeMillis(), trigger, result.ok, result.steps, result.error))
         return result
     }
+
+    /** Register this app on the watch if it has none (app info 0x22 all FF), which
+     *  makes it ignore D and, it seems, not ask for the time. Writes only when the watch
+     *  answers exactly the unregistered value (approved by the user, 2026-11-21; value
+     *  from izivkov/gshock_api). Never stops the sync. Run inside [exclusive]. */
+    private suspend fun registerAppIfNeeded() {
+        val log = ListenLog(app)
+        fun note(msg: String) = log.add("app info: $msg")
+        try {
+            val current = ble.read(Protocol.OP_APP_INFO)
+            if (!Protocol.appInfoNeedsRegister(current)) {
+                note("already set (${current.hex()}), nothing written")
+                return
+            }
+            note("not registered (${current.hex()}); writing ${Protocol.APP_INFO_REGISTER.hex()}")
+            ble.write(Protocol.APP_INFO_REGISTER)
+            val after = ble.read(Protocol.OP_APP_INFO)
+            note(if (after.contentEquals(Protocol.APP_INFO_REGISTER)) "registered, reads back ${after.hex()}"
+                 else "written, but reads back ${after.hex()}")
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            android.util.Log.e("Trrrst", "app info check failed", e)
+            note("check failed: ${e.message}; continuing with the sync")
+            if (ble.state.value != BleManager.ConnState.READY) throw e
+        }
+    }
+
+    private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
 
     /** Run one complete watch operation (possibly many reads/writes) on its own.
      *  Operations queue in order, so multi-step changes never interleave. */
