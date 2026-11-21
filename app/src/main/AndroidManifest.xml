@@ -17,6 +17,15 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
         android:maxSdkVersion="30" />
 
+    <!-- Background listening test (PLAN Phase 3, step 1). Foreground service + quiet
+         notification while listening; a wake lock keeps the CPU awake for that window
+         only. The CONNECTED_DEVICE and POST_NOTIFICATIONS permissions only matter on
+         Android 14 / 13 and later. No network permissions. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:label="TRRRST Watch"
         android:icon="@mipmap/ic_launcher"
@@ -32,5 +41,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".listen.ListenService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+        <receiver
+            android:name=".listen.ListenAlarmReceiver"
+            android:exported="false" />
     </application>
 </manifest>

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -48,6 +49,14 @@ class BleManager(private val context: Context) {
 
     /** find-phone ring events (true = start, false = stop) */
     val findPhoneEvents = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
+
+    /** Every notification from the watch, as (characteristic, value). Only the
+     *  background listening test watches this, to log what the watch sends by itself. */
+    val notifications = MutableSharedFlow<Pair<UUID, ByteArray>>(extraBufferCapacity = 64)
+
+    /** Android's status code from the last time the watch disconnected (19 = the watch hung up). */
+    @Volatile var lastDisconnectStatus: Int? = null
+        private set
 
     private var writeWait: CompletableDeferred<Boolean>? = null
 
@@ -125,7 +134,7 @@ class BleManager(private val context: Context) {
                 } catch (e: SecurityException) {
                     r.scanRecord?.deviceName
                 } ?: return
-                if (!name.startsWith("CASIO F-B100W")) return
+                if (!name.startsWith(WATCH_NAME)) return
                 val address = r.device.address
                 when (WatchMatcher.onScanResult(savedAddress, address)) {
                     WatchMatcher.ScanPick.CONNECT_NOW -> {
@@ -176,6 +185,50 @@ class BleManager(private val context: Context) {
         }
     }
 
+    /** Background listening test (PLAN Phase 3, step 1): report every advert from an
+     *  F-B100W (by name) or from [savedAddress], until the returned function is called.
+     *  Unlike [scan], this never hands a watch to the app's connect flow and doesn't
+     *  change [state]. Filtered on purpose: Android pauses unfiltered scans while the
+     *  screen is off. Returns null (after calling [onFailed]) if it can't start. */
+    fun listen(
+        savedAddress: String?,
+        onResult: (ScanResult) -> Unit,
+        onFailed: (String) -> Unit,
+    ): (() -> Unit)? {
+        val adapter = bluetoothAdapter
+        ScanCheck.problem(
+            hasAdapter = adapter != null,
+            bluetoothOn = runCatching { adapter?.isEnabled == true }.getOrDefault(false),
+            locationOn = locationOn(),
+            sdkInt = Build.VERSION.SDK_INT,
+        )?.let { onFailed(it); return null }
+        val scanner = try {
+            adapter?.bluetoothLeScanner
+        } catch (e: SecurityException) {
+            onFailed(ScanCheck.NOT_ALLOWED); return null
+        } ?: run { onFailed(ScanCheck.BLUETOOTH_OFF); return null }
+        val filters = mutableListOf(ScanFilter.Builder().setDeviceName(WATCH_NAME).build())
+        savedAddress?.let { address ->
+            runCatching { ScanFilter.Builder().setDeviceAddress(address.trim().uppercase()).build() }
+                .onSuccess { filters += it }
+        }
+        val cb = object : ScanCallback() {
+            override fun onScanResult(type: Int, r: ScanResult) = onResult(r)
+            override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(onResult)
+            override fun onScanFailed(code: Int) = onFailed("scan failed, code=$code")
+        }
+        try {
+            scanner.startScan(
+                filters, ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb
+            )
+        } catch (e: SecurityException) {
+            onFailed(ScanCheck.NOT_ALLOWED); return null
+        } catch (e: IllegalStateException) {
+            onFailed(ScanCheck.BLUETOOTH_OFF); return null
+        }
+        return { stopScanQuietly(scanner, cb) }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun connect(dev: BluetoothDevice): Boolean = suspendCancellableCoroutine { cont ->
         // A previous GATT client that was never closed (e.g. the watch ended the last
@@ -183,6 +236,7 @@ class BleManager(private val context: Context) {
         // clobber each other's operations. Always start from exactly one client.
         closeGatt()
         drainQueues()
+        lastDisconnectStatus = null
         device = dev
         _state.value = ConnState.CONNECTING
         _statusLine.value = "connecting…"
@@ -199,6 +253,7 @@ class BleManager(private val context: Context) {
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         android.util.Log.d("TrrrstBLE", "disconnected, status=$status")
+                        lastDisconnectStatus = status
                         // Release the client so Android doesn't revive it on the next connect.
                         g.close()
                         if (gatt === g) gatt = null
@@ -286,6 +341,7 @@ class BleManager(private val context: Context) {
     }
 
     private fun dispatch(uuid: UUID, value: ByteArray) {
+        notifications.tryEmit(uuid to value)
         when (uuid.toString()) {
             Protocol.CHR_ALL_FEATURES -> {
                 if (value.size > 1 && value[0] == Protocol.OP_ALERT)
@@ -303,9 +359,13 @@ class BleManager(private val context: Context) {
         _state.value = ConnState.DISCONNECTED
     }
 
-    suspend fun pair() {
-        device?.createBond()
-    }
+    /** The watch the last [connect] went to (null before the first one). */
+    val lastDevice: BluetoothDevice? get() = device
+
+    /** Bond (pair) state of the watch at [address], or null if Android can't tell. */
+    fun bondState(address: String): Int? = runCatching {
+        bluetoothAdapter?.getRemoteDevice(address.trim().uppercase())?.bondState
+    }.getOrNull()
 
     // ------------------------------------------------ primitives
     private suspend fun enableNotify(uuidStr: String): Boolean {
@@ -419,3 +479,6 @@ class BleManager(private val context: Context) {
             }
         }
 }
+
+/** Name the watch advertises. */
+const val WATCH_NAME = "CASIO F-B100W"

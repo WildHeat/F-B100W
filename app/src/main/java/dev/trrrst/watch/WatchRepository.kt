@@ -5,6 +5,7 @@ import android.content.Context
 import dev.trrrst.watch.ble.BleManager
 import dev.trrrst.watch.ble.Protocol
 import dev.trrrst.watch.ble.ScanCheck
+import dev.trrrst.watch.ble.WATCH_NAME
 import dev.trrrst.watch.data.StepStore
 import dev.trrrst.watch.data.SyncLogStore
 import dev.trrrst.watch.data.SyncRecord
@@ -37,6 +38,10 @@ class WatchRepository(
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val operationMutex = Mutex()
+    /** True while the listening test owns the connection (PLAN Phase 3, step 1). The
+     *  screen then leaves it alone instead of loading the watch state. */
+    @Volatile var testOwnsConnection = false
+
     private val _busy = MutableStateFlow(false)
     /** True while a watch operation runs, whoever started it. */
     val busy: StateFlow<Boolean> = _busy
@@ -263,6 +268,3 @@ class WatchRepository(
             }
         }
 }
-
-/** Name the watch advertises (and the fallback when Android can't tell us). */
-private const val WATCH_NAME = "CASIO F-B100W"
