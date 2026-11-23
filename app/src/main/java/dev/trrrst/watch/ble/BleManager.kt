@@ -189,9 +189,12 @@ class BleManager(private val context: Context) {
      *  F-B100W (by name) or from [savedAddress], until the returned function is called.
      *  Unlike [scan], this never hands a watch to the app's connect flow and doesn't
      *  change [state]. Filtered on purpose: Android pauses unfiltered scans while the
-     *  screen is off. Returns null (after calling [onFailed]) if it can't start. */
+     *  screen is off. [fast] = SCAN_MODE_LOW_LATENCY (someone is waiting: Listen now,
+     *  wake-up test); otherwise BALANCED, which uses less battery for the long scheduled
+     *  windows. Returns null (after calling [onFailed]) if it can't start. */
     fun listen(
         savedAddress: String?,
+        fast: Boolean,
         onResult: (ScanResult) -> Unit,
         onFailed: (String) -> Unit,
     ): (() -> Unit)? {
@@ -219,7 +222,13 @@ class BleManager(private val context: Context) {
         }
         try {
             scanner.startScan(
-                filters, ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb
+                filters,
+                ScanSettings.Builder()
+                    .setScanMode(if (fast) ScanSettings.SCAN_MODE_LOW_LATENCY else ScanSettings.SCAN_MODE_BALANCED)
+                    // Report a watch from its first advert (as izivkov's Smart Sync does).
+                    .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+                    .build(),
+                cb
             )
         } catch (e: SecurityException) {
             onFailed(ScanCheck.NOT_ALLOWED); return null
@@ -229,8 +238,29 @@ class BleManager(private val context: Context) {
         return { stopScanQuietly(scanner, cb) }
     }
 
+    /** Counts [connect] calls. A caller that remembers its number can tell whether a
+     *  newer connect has replaced its own (see [disconnectIfStill]). */
+    @Volatile var connectGeneration = 0
+        private set
+    private var pendingConnect: CancellableContinuation<Boolean>? = null
+
+    /** [autoConnect] = a standing request (PLAN Phase 3, Part 2b): Android's Bluetooth
+     *  chip connects by itself the moment the watch advertises, however long that takes,
+     *  without scan results having to reach the app. While it waits, [state] stays
+     *  DISCONNECTED, so the screen and the app's own Connect aren't affected. Any newer
+     *  [connect] replaces it, and this call then returns false. [onStarted] gets this
+     *  call's [connectGeneration]. */
     @OptIn(ExperimentalCoroutinesApi::class)
-    suspend fun connect(dev: BluetoothDevice): Boolean = suspendCancellableCoroutine { cont ->
+    suspend fun connect(
+        dev: BluetoothDevice,
+        autoConnect: Boolean = false,
+        onStarted: (Int) -> Unit = {},
+    ): Boolean = suspendCancellableCoroutine { cont ->
+        // A newer connect replaces a pending one: let the old caller go on (it gets false).
+        pendingConnect?.let { if (it.isActive) it.resume(false) {} }
+        pendingConnect = cont
+        val myGeneration = ++connectGeneration
+        onStarted(myGeneration)
         // A previous GATT client that was never closed (e.g. the watch ended the last
         // session) gets reconnected by Android alongside the new one, and the two
         // clobber each other's operations. Always start from exactly one client.
@@ -238,8 +268,10 @@ class BleManager(private val context: Context) {
         drainQueues()
         lastDisconnectStatus = null
         device = dev
-        _state.value = ConnState.CONNECTING
-        _statusLine.value = "connecting…"
+        if (!autoConnect) {
+            _state.value = ConnState.CONNECTING
+            _statusLine.value = "connecting…"
+        }
         val cb = object : BluetoothGattCallback() {
             /** Callbacks from an older, already-replaced client are ignored. */
             private fun stale(g: BluetoothGatt) = gatt.let { it != null && it !== g }
@@ -249,6 +281,10 @@ class BleManager(private val context: Context) {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
                         gatt = g
+                        if (autoConnect) {
+                            _state.value = ConnState.CONNECTING
+                            _statusLine.value = "connecting…"
+                        }
                         g.requestMtu(512)
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
@@ -311,7 +347,7 @@ class BleManager(private val context: Context) {
             }
         }
         gatt = try {
-            dev.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
+            dev.connectGatt(context, autoConnect, cb, BluetoothDevice.TRANSPORT_LE)
         } catch (e: Exception) {   // SecurityException, or Bluetooth switched off
             android.util.Log.e("TrrrstBLE", "connectGatt failed", e)
             null
@@ -321,7 +357,13 @@ class BleManager(private val context: Context) {
             if (cont.isActive) cont.resume(false) {}
             return@suspendCancellableCoroutine
         }
-        cont.invokeOnCancellation { closeGatt() }
+        // Only close the client if it's still this call's: a newer connect owns it otherwise.
+        cont.invokeOnCancellation { if (connectGeneration == myGeneration) closeGatt() }
+    }
+
+    /** Disconnect only if no newer [connect] has replaced connect number [generation]. */
+    fun disconnectIfStill(generation: Int) {
+        if (connectGeneration == generation) disconnect()
     }
 
     private fun closeGatt() {
@@ -361,6 +403,11 @@ class BleManager(private val context: Context) {
 
     /** The watch the last [connect] went to (null before the first one). */
     val lastDevice: BluetoothDevice? get() = device
+
+    /** The Bluetooth device for a saved address, or null if Android can't make one. */
+    fun remoteDevice(address: String): BluetoothDevice? = runCatching {
+        bluetoothAdapter?.getRemoteDevice(address.trim().uppercase())
+    }.getOrNull()
 
     /** Bond (pair) state of the watch at [address], or null if Android can't tell. */
     fun bondState(address: String): Int? = runCatching {

@@ -34,6 +34,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
@@ -74,6 +75,7 @@ class ListenService : Service() {
         val syncAt = intent?.getLongExtra(ListenScheduler.EXTRA_SYNC_AT, now + 120_000) ?: (now + 120_000)
         val end = intent?.getLongExtra(ListenScheduler.EXTRA_END, syncAt + 1_200_000) ?: (syncAt + 1_200_000)
         val label = intent?.getStringExtra(ListenScheduler.EXTRA_LABEL) ?: "the watch's sync"
+        val fastScan = intent?.getBooleanExtra(ListenScheduler.EXTRA_FAST_SCAN, false) ?: false
         // Keep the CPU awake for the window only, or timers stall while the screen is off.
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "trrrst:listen")
@@ -81,7 +83,7 @@ class ListenService : Service() {
         scope.launch {
             try {
                 val limit = (end - System.currentTimeMillis()).coerceAtLeast(0) + 60_000
-                val done = withTimeoutOrNull(limit) { ListenRun(this@ListenService, log).run(label, plannedStart, end) }
+                val done = withTimeoutOrNull(limit) { ListenRun(this@ListenService, log).run(label, plannedStart, end, fastScan) }
                 if (done == null) log.add("hard time limit reached; stopped")
             } catch (e: CancellationException) {
                 throw e
@@ -152,7 +154,12 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
     private fun clock(ms: Long): String = clockFmt.format(Date(ms))
     private var probeResult = "no connection tried (the saved watch wasn't heard)"
 
-    suspend fun run(label: String, plannedStart: Long, end: Long) = coroutineScope {
+    /** Set once a connection attempt has been made in this window (by either way of waiting). */
+    @Volatile private var claimed = false
+    /** The standing connection request is waiting for the watch right now. */
+    @Volatile private var standingWaiting = false
+
+    suspend fun run(label: String, plannedStart: Long, end: Long, fastScan: Boolean) = coroutineScope {
         val now = System.currentTimeMillis()
         val saved = repo.savedWatch.value
         log.add("=== listening test: $label, listening until ${ListenScheduler.fmt(end)}")
@@ -165,11 +172,13 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
             log.add("too late: the listening window is already over")
             return@coroutineScope
         }
+        val savedDev = saved?.let { ble.remoteDevice(it.address) }
 
         val tracker = AdvertTracker { clock(it) }
+        var scanFallback: Job? = null
         var probe: Job? = null
-        var probeDone = false
         var nextProbeAt = 0L
+        var heardWhileStanding = false
         val stateLog = launch {
             var prev = ble.state.value
             ble.state.collect {
@@ -183,34 +192,58 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
                 }
             }
         }
-        val stop = ble.listen(
-            saved?.address,
-            onResult = { r ->
-                val address = r.device.address
-                val name = runCatching { r.device.name }.getOrNull() ?: r.scanRecord?.deviceName
-                tracker.seen(
-                    System.currentTimeMillis(), address, name, r.rssi, r.isConnectable,
-                    r.scanRecord?.bytes?.let { advertHex(it) } ?: "",
-                ).forEach(log::add)
-                // One test connection per window. If the app was using the watch, try
-                // again on a later advert (at most every 5 s) instead of giving up.
-                val t = System.currentTimeMillis()
-                if (!probeDone && probe?.isActive != true && t >= nextProbeAt &&
-                    saved != null && WatchMatcher.sameAddress(saved.address, address)
-                ) {
-                    probe = launch {
-                        if (probe(r.device)) probeDone = true
-                        else nextProbeAt = System.currentTimeMillis() + 5_000
+
+        // Way 1: scan in short bursts (5 s on, 3 s off), like izivkov's Smart Sync.
+        val onResult: (android.bluetooth.le.ScanResult) -> Unit = { r ->
+            val address = r.device.address
+            val name = runCatching { r.device.name }.getOrNull() ?: r.scanRecord?.deviceName
+            tracker.seen(
+                System.currentTimeMillis(), address, name, r.rssi, r.isConnectable,
+                r.scanRecord?.bytes?.let { advertHex(it) } ?: "",
+            ).forEach(log::add)
+            val t = System.currentTimeMillis()
+            if (!claimed && saved != null && WatchMatcher.sameAddress(saved.address, address)) {
+                if (standingWaiting) {
+                    // Give the standing request a moment, so the log shows whether it works on its own.
+                    if (!heardWhileStanding) {
+                        heardWhileStanding = true
+                        log.add("scan heard the watch; giving the standing request 2 s to connect first")
                     }
+                    if (scanFallback?.isActive != true) scanFallback = launch {
+                        delay(2_000)
+                        // CONNECTING while the standing request waits = it's connecting right now.
+                        val standingConnecting = standingWaiting && ble.state.value == ConnState.CONNECTING
+                        if (!claimed && probe?.isActive != true && !standingConnecting) {
+                            log.add("standing request didn't connect within 2 s; connecting from the scan")
+                            probe = launch { if (!probeFromScan(r.device)) nextProbeAt = System.currentTimeMillis() + 5_000 }
+                        }
+                    }
+                } else if (probe?.isActive != true && t >= nextProbeAt) {
+                    // If the app was using the watch, try again on a later advert (at most every 5 s).
+                    probe = launch { if (!probeFromScan(r.device)) nextProbeAt = System.currentTimeMillis() + 5_000 }
                 }
-            },
-            onFailed = { log.add("couldn't listen: $it") },
-        )
-        if (stop == null) {
-            stateLog.cancel()
-            return@coroutineScope
+            }
         }
-        log.add("listening for name \"$WATCH_NAME\"" + (saved?.let { " or address ${it.address}" } ?: ""))
+        var lastScanProblem: String? = null
+        val scanLoop = launch {
+            while (System.currentTimeMillis() < end) {
+                val stop = ble.listen(saved?.address, fast = fastScan, onResult = onResult, onFailed = { msg ->
+                    if (msg != lastScanProblem) { log.add("couldn't listen: $msg"); lastScanProblem = msg }
+                })
+                if (stop != null) lastScanProblem = null
+                try { delay(ScanBursts.ON_MS) } finally { stop?.invoke() }
+                delay(ScanBursts.OFF_MS)
+            }
+        }
+        log.add("listening two ways: scan in ${ScanBursts.ON_MS / 1000} s bursts with " +
+            "${ScanBursts.OFF_MS / 1000} s pauses for name \"$WATCH_NAME\"" +
+            (saved?.let { " or address ${it.address}" } ?: "") +
+            (if (fastScan) " (fast scan)" else " (balanced scan, uses less battery)") +
+            if (savedDev != null) ", plus a standing connection request to the saved watch" else "")
+
+        // Way 2: a standing connection request; Android's Bluetooth chip connects by itself.
+        val standing = launch { if (savedDev != null) standingLoop(savedDev, end) }
+
         try {
             var lastBeat = System.currentTimeMillis()
             while (System.currentTimeMillis() < end) {
@@ -219,27 +252,90 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
                 tracker.tick(t).forEach(log::add)
                 if (t - lastBeat >= 60_000) {
                     lastBeat = t
-                    log.add("still listening: ${tracker.total} adverts so far, screen ${if (screenOn()) "on" else "off"}")
+                    log.add("still listening: ${tracker.total} adverts so far, screen ${if (screenOn()) "on" else "off"}" +
+                        if (standingWaiting) ", standing request waiting" else "")
                 }
             }
         } finally {
-            stop()
+            scanLoop.cancel()
+            standing.cancel()
+            scanFallback?.cancel()
             probe?.cancel()
             stateLog.cancel()
             tracker.finish()
             val bursts = tracker.summary()
-            log.add("--- summary: ${tracker.total} adverts heard" + if (bursts.isEmpty()) "; the watch wasn't heard at all" else "")
+            log.add("--- summary: ${tracker.total} adverts heard by the scan" +
+                if (bursts.isEmpty()) "; the scan didn't hear the watch" else "")
             bursts.forEach { log.add("  $it") }
             log.add("  connection test: $probeResult")
             log.add("=== listening test over")
         }
     }
 
-    /** Connect to the saved watch, note anything it sends by itself, do one read, hang
-     *  up. Nothing is written to the watch (apart from the standard Bluetooth
-     *  "send me notifications" switch that every connect sets). Returns false if it
-     *  didn't try because the app was using the watch (the caller retries later). */
-    private suspend fun probe(dev: BluetoothDevice): Boolean {
+    private fun appIdle() = !repo.busy.value && ble.state.value in setOf(ConnState.DISCONNECTED, ConnState.ERROR)
+
+    /** Keep a standing connection request open while the app isn't using the watch. If
+     *  the app connects (or the scan does), the request steps aside; it's never left open
+     *  after the window (the GATT client is closed: hard rule). */
+    private suspend fun standingLoop(dev: BluetoothDevice, end: Long) {
+        var waitingNoted = false
+        while (!claimed && System.currentTimeMillis() < end) {
+            if (!appIdle()) {
+                if (!waitingNoted) { log.add("standing request: waiting until the app has finished with the watch"); waitingNoted = true }
+                delay(5_000)
+                continue
+            }
+            waitingNoted = false
+            var generation = -1
+            repo.testOwnsConnection = true
+            standingWaiting = true
+            log.add("standing connection request set for ${dev.address}")
+            val ok = try {
+                withTimeoutOrNull((end - System.currentTimeMillis()).coerceAtLeast(1)) {
+                    ble.connect(dev, autoConnect = true) { generation = it }
+                }
+            } finally {
+                standingWaiting = false
+                // Cancelled (window over): close our client unless a newer connect owns it.
+                if (!currentCoroutineContext().isActive) {
+                    ble.disconnectIfStill(generation)
+                    repo.testOwnsConnection = false
+                }
+            }
+            when {
+                ok == true && !claimed -> {
+                    claimed = true
+                    log.add("connected by the standing request")
+                    afterConnect(via = "the standing request", t0 = System.currentTimeMillis(), generation = generation)
+                    return
+                }
+                ok == null -> {
+                    ble.disconnectIfStill(generation)
+                    repo.testOwnsConnection = false
+                    log.add("standing request closed (listening window over)")
+                    return
+                }
+                ble.connectGeneration != generation -> {
+                    // A newer connect replaced ours: the scan's test connection, or the app.
+                    if (!claimed) {
+                        repo.testOwnsConnection = false
+                        log.add("standing request stepped aside: the app connected to the watch")
+                    }
+                }
+                else -> {
+                    repo.testOwnsConnection = false
+                    log.add("standing request ended without connecting (Android status ${ble.lastDisconnectStatus}); trying again in 5 s")
+                    ble.disconnectIfStill(generation)
+                    delay(5_000)
+                }
+            }
+        }
+    }
+
+    /** Connect from a scan result. Returns false if it didn't try because the app was
+     *  using the watch (the caller retries later). */
+    private suspend fun probeFromScan(dev: BluetoothDevice): Boolean {
+        if (claimed) return true
         val inUse = repo.busy.value || ble.state.value !in setOf(ConnState.DISCONNECTED, ConnState.ERROR)
         if (inUse) {
             val msg = "not tried yet: the app was using the watch (${ble.state.value.name.lowercase()})"
@@ -247,21 +343,43 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
             probeResult = msg
             return false
         }
-        var attempted = false
+        claimed = true
+        var generation = -1
+        try {
+            repo.testOwnsConnection = true
+            log.add("connecting to ${dev.address} from the scan (test: read only)")
+            val t0 = System.currentTimeMillis()
+            val ok = withTimeoutOrNull(30_000) { ble.connect(dev) { generation = it } }
+            if (ok != true) {
+                probeResult = if (ok == null) "connect from the scan timed out after 30 s"
+                    else "connect from the scan failed after %.1f s".format((System.currentTimeMillis() - t0) / 1000.0)
+                log.add(probeResult)
+                ble.disconnectIfStill(generation)
+                repo.testOwnsConnection = false
+                return true
+            }
+            log.add("connected from the scan after %.1f s".format((System.currentTimeMillis() - t0) / 1000.0))
+            afterConnect(via = "the scan", t0 = t0, generation = generation)
+        } catch (e: CancellationException) {
+            ble.disconnectIfStill(generation)
+            repo.testOwnsConnection = false
+            throw e
+        }
+        return true
+    }
+
+    /** Connected (by either way): note anything the watch sends by itself, read the
+     *  connection reason, hang up. Nothing is written to the watch (apart from the
+     *  standard Bluetooth "send me notifications" switch that every connect sets). */
+    private suspend fun afterConnect(via: String, t0: Long, generation: Int) {
+        fun secs() = "%.1f s".format((System.currentTimeMillis() - t0) / 1000.0)
         try {
             repo.exclusive {
-                log.add("connecting to ${dev.address} (test: read only)")
-                attempted = true
-                repo.testOwnsConnection = true
-                val t0 = System.currentTimeMillis()
-                fun secs() = "%.1f s".format((System.currentTimeMillis() - t0) / 1000.0)
-                val ok = withTimeoutOrNull(30_000) { ble.connect(dev) }
-                if (ok != true) {
-                    probeResult = if (ok == null) "connect timed out after 30 s" else "connect failed after ${secs()}"
+                if (ble.state.value != ConnState.READY) {
+                    probeResult = "connected via $via, but the watch had already hung up"
                     log.add(probeResult)
                     return@exclusive
                 }
-                log.add("connected and ready after ${secs()}")
                 // Read once at once and once after the wait: does waiting change the answer?
                 try {
                     val f0 = ble.read(Protocol.OP_BLE_FEATURES)
@@ -283,7 +401,7 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
                     listener.cancel()
                 }
                 if (ble.state.value != ConnState.READY) {
-                    probeResult = "connected, but the watch hung up after ${secs()} (it sent $heard message(s) by itself)"
+                    probeResult = "connected via $via, but the watch hung up after ${secs()} (it sent $heard message(s) by itself)"
                     log.add(probeResult)
                     return@exclusive
                 }
@@ -298,7 +416,7 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
                     log.add("read 10 -> ${it.hex()} (watch reports ${Protocol.decodeBleFeatures(it).first}, " +
                         "reason: ${Protocol.connectReason(it).label})")
                 }
-                probeResult = "connected after the scan in ${secs()}; the watch sent $heard message(s) by itself; " +
+                probeResult = "connected via $via; the watch sent $heard message(s) by itself; " +
                     "the read ${if (f != null) "worked" else "failed"}"
                 log.add(probeResult)
             }
@@ -309,14 +427,11 @@ private class ListenRun(private val ctx: Context, private val log: ListenLog) {
             probeResult = "connection test failed: $e"
             log.add(probeResult)
         } finally {
-            // Always close the GATT client (hard rule), also on timeout or failure.
-            if (attempted) {
-                ble.disconnect()
-                log.add("disconnected (test only, nothing written)")
-            }
+            // Always close the GATT client (hard rule), unless the app has since taken over.
+            ble.disconnectIfStill(generation)
+            log.add("disconnected (test only, nothing written)")
             repo.testOwnsConnection = false
         }
-        return true
     }
 
     private fun screenOn() = ctx.getSystemService(PowerManager::class.java).isInteractive
