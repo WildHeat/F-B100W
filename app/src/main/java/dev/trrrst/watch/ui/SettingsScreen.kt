@@ -4,6 +4,8 @@ import android.app.TimePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,7 +21,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.trrrst.watch.WatchViewModel
 import dev.trrrst.watch.ble.BleManager
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.trrrst.watch.listen.ListenScheduler
+import dev.trrrst.watch.listen.PhoneSettings
+import dev.trrrst.watch.listen.PhoneSetup
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -35,7 +40,9 @@ fun SettingsScreen(vm: WatchViewModel) {
     if (b == null || bs == null || prof == null || timer == null) {
         // The remembered watch can be seen and forgotten without a connection.
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            // Scrolls: the Background test card and Phone setup box don't fit on one screen.
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             YourWatchSection(vm)
@@ -238,6 +245,52 @@ private fun ListenTestSection(vm: WatchViewModel) {
                 style = MaterialTheme.typography.bodySmall,
             )
             if (vm.pairMessage.isNotEmpty()) Text(vm.pairMessage, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    PhoneSetupCard(vm)
+}
+
+/** Phone setup box (PLAN Phase 3, Part 2): what stops the listening alarms on this phone. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PhoneSetupCard(vm: WatchViewModel) {
+    val ctx = LocalContext.current
+    // The user changes these in Android's settings and comes back: check again then.
+    LifecycleResumeEffect(Unit) {
+        vm.refreshPhoneSetup()
+        onPauseOrDispose { }
+    }
+    val s = vm.phoneSetup
+    Card {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Phone setup", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "Phones save battery by holding back apps in the background, so the listening " +
+                    "times can start hours late. To keep them on time:",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            PhoneSetup.steps(s).forEachIndexed { i, step ->
+                Text("${i + 1}. $step", style = MaterialTheme.typography.bodySmall)
+            }
+            Text(PhoneSetup.batteryLine(s), style = MaterialTheme.typography.bodyMedium)
+            Text(PhoneSetup.alarmLine(s), style = MaterialTheme.typography.bodyMedium)
+            if (s.isXiaomi) Text("Autostart: the app can't check this, please look yourself.",
+                style = MaterialTheme.typography.bodyMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (s.isXiaomi) OutlinedButton(onClick = { PhoneSettings.openAutostart(ctx) }) { Text("Autostart") }
+                OutlinedButton(onClick = { PhoneSettings.openAppInfo(ctx) }) { Text("App info") }
+                OutlinedButton(onClick = { PhoneSettings.openBatteryOptimisation(ctx) }) { Text("Battery optimisation") }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            OutlinedButton(onClick = { vm.testWakeUp() }) { Text("Test the wake-up") }
+            Text(
+                "Sets a test alarm 3 minutes from now and listens for 5 minutes. Swipe the app away " +
+                    "and lock the phone; the log then shows how late the alarm came. Works with the " +
+                    "switch above on or off.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (vm.wakeTestMessage.isNotEmpty()) Text(vm.wakeTestMessage, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

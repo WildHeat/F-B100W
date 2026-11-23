@@ -48,6 +48,17 @@ object ListenSchedule {
         )
     }
 
+    /** "Test the wake-up" (PLAN Phase 3, Part 2): starts [WAKE_TEST_LEAD] from now, so the
+     *  user has time to swipe the app away and lock the phone, and lasts [WAKE_TEST_LENGTH]. */
+    val WAKE_TEST_LEAD: Duration = Duration.ofMinutes(3)
+    val WAKE_TEST_LENGTH: Duration = Duration.ofMinutes(5)
+    const val WAKE_TEST_LABEL = "wake-up test"
+
+    fun wakeTest(now: ZonedDateTime): Window {
+        val start = now.plus(WAKE_TEST_LEAD).withNano(0)
+        return Window(start, start, start.plus(WAKE_TEST_LENGTH), WAKE_TEST_LABEL)
+    }
+
     /** The times to listen around: the manual's four, plus the watch's own setting if on. */
     fun times(autoSyncOn: Boolean?, hour: Int, minute: Int): List<LocalTime> =
         if (autoSyncOn == true && hour in 0..23 && minute in 0..59)

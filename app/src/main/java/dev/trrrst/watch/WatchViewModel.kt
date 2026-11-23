@@ -89,6 +89,27 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         ListenScheduler.listenNow(getApplication())
     }
 
+    /** Phone setup box (PLAN Phase 3, Part 2). Re-read when the screen resumes, since
+     *  the user changes these in Android's settings. */
+    var phoneSetup by mutableStateOf(dev.trrrst.watch.listen.PhoneSettings.state(app))
+        private set
+
+    fun refreshPhoneSetup() {
+        phoneSetup = dev.trrrst.watch.listen.PhoneSettings.state(getApplication())
+        listenStatus = ListenScheduler.status(getApplication())
+    }
+
+    /** What the "Test the wake-up" button last did (empty before the first). */
+    var wakeTestMessage by mutableStateOf("")
+        private set
+
+    fun testWakeUp() {
+        val w = ListenScheduler.scheduleWakeTest(getApplication())
+        val hm = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+        wakeTestMessage = "Wake-up test set for ${w.start.format(hm)}. Now swipe the app away from " +
+            "Recents and lock the phone. Check back after ${w.end.format(hm)}."
+    }
+
     /** The app is closed at the watch's auto-sync time, so keep that time on the phone. */
     private fun learnAutoSync(bs: Protocol.BleSettings) {
         ListenScheduler.rememberAutoSync(getApplication(), bs)

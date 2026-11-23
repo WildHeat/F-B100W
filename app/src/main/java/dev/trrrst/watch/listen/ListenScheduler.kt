@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.content.ContextCompat
+import dev.trrrst.watch.MainActivity
 import dev.trrrst.watch.ble.Protocol
 import java.time.Instant
 import java.time.ZoneId
@@ -29,6 +30,17 @@ object ListenScheduler {
     const val EXTRA_SYNC_AT = "syncAt"
     const val EXTRA_END = "end"
     const val EXTRA_LABEL = "label"
+    /** true: SCAN_MODE_LOW_LATENCY (Listen now, wake-up test); false: BALANCED (daily windows). */
+    const val EXTRA_FAST_SCAN = "fastScan"
+
+    /** PendingIntent request codes: the daily window and the wake-up test don't replace each other. */
+    private const val REQ_DAILY = 0
+    private const val REQ_WAKE_TEST = 1
+
+    /** Scan speed for the daily windows. Temporarily fast (user-approved 2026-11-22): on
+     *  22 Nov the balanced scan heard nothing in all five windows, so one night with the
+     *  fast scan rules out "the scan missed a short call". Set back to false afterwards. */
+    private const val DAILY_FAST_SCAN = true
 
     /** "Listen now": how long, for pressing D on the watch by hand. */
     const val LISTEN_NOW_MS = 5 * 60_000L
@@ -84,7 +96,7 @@ object ListenScheduler {
         val st = status(app, notBefore)
         val w = st.next
         if (w == null) {
-            am.cancel(alarmIntent(app, null))
+            am.cancel(alarmIntent(app, null, REQ_DAILY))
             if (p.contains(KEY_NEXT)) {
                 p.edit().remove(KEY_NEXT).apply()
                 ListenLog(app).add("no listening planned (test is off)")
@@ -92,10 +104,7 @@ object ListenScheduler {
             return null
         }
         val at = w.start.toInstant().toEpochMilli()
-        val exact = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
-        val pi = alarmIntent(app, w)
-        if (exact) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        val exact = setAlarm(app, at, alarmIntent(app, w, REQ_DAILY, "the watch's sync at ${w.label}", fastScan = DAILY_FAST_SCAN))
         if (p.getLong(KEY_NEXT, 0L) != at) {
             p.edit().putLong(KEY_NEXT, at).apply()
             ListenLog(app).add(
@@ -106,16 +115,57 @@ object ListenScheduler {
         return w
     }
 
-    private fun alarmIntent(ctx: Context, w: ListenSchedule.Window?): PendingIntent {
+    /** "Test the wake-up": a separate alarm (its own request code, so the daily one stays)
+     *  a few minutes ahead, with a short window and the fast scan. Returns the window. */
+    fun scheduleWakeTest(ctx: Context): ListenSchedule.Window {
+        val app = ctx.applicationContext
+        val w = ListenSchedule.wakeTest(ZonedDateTime.now())
+        val at = w.start.toInstant().toEpochMilli()
+        val exact = setAlarm(app, at, alarmIntent(app, w, REQ_WAKE_TEST, ListenSchedule.WAKE_TEST_LABEL, fastScan = true))
+        ListenLog(app).add(
+            "wake-up test set: listening ${fmt(w.start)} to ${fmt(w.end)}" +
+                if (exact) " (alarm-clock alarm)" else " (inexact alarm: exact ones aren't allowed on this phone)"
+        )
+        return w
+    }
+
+    /** True if exact alarms are allowed (API 31+ asks for a permission we don't hold). */
+    fun exactAlarmsAllowed(ctx: Context): Boolean =
+        Build.VERSION.SDK_INT < 31 || ctx.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+
+    /** An alarm-clock alarm: the kind Android (and MIUI) holds back least, because it's
+     *  meant to wake people. It shows a small alarm icon. Falls back to an inexact alarm
+     *  where exact ones aren't allowed. Returns true if the alarm is exact. */
+    private fun setAlarm(app: Context, at: Long, pi: PendingIntent): Boolean {
+        val am = app.getSystemService(AlarmManager::class.java)
+        if (exactAlarmsAllowed(app)) {
+            val show = PendingIntent.getActivity(
+                app, 0, Intent(app, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+            )
+            try {
+                am.setAlarmClock(AlarmManager.AlarmClockInfo(at, show), pi)
+                return true
+            } catch (e: SecurityException) {
+                ListenLog(app).add("Android refused the alarm-clock alarm, using an inexact one: $e")
+            }
+        }
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        return false
+    }
+
+    private fun alarmIntent(
+        ctx: Context, w: ListenSchedule.Window?, requestCode: Int, label: String = "", fastScan: Boolean = false,
+    ): PendingIntent {
         val i = Intent(ctx, ListenAlarmReceiver::class.java).setAction("dev.trrrst.watch.LISTEN")
         if (w != null) {
             i.putExtra(EXTRA_START, w.start.toInstant().toEpochMilli())
             i.putExtra(EXTRA_SYNC_AT, w.syncAt.toInstant().toEpochMilli())
             i.putExtra(EXTRA_END, w.end.toInstant().toEpochMilli())
-            i.putExtra(EXTRA_LABEL, "the watch's sync at ${w.label}")
+            i.putExtra(EXTRA_LABEL, label)
+            i.putExtra(EXTRA_FAST_SCAN, fastScan)
         }
         return PendingIntent.getBroadcast(
-            ctx, 0, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            ctx, requestCode, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
     }
 
@@ -128,6 +178,7 @@ object ListenScheduler {
             .putExtra(EXTRA_SYNC_AT, now)
             .putExtra(EXTRA_END, now + LISTEN_NOW_MS)
             .putExtra(EXTRA_LABEL, "Listen now (press D on the watch)")
+            .putExtra(EXTRA_FAST_SCAN, true)
         try {
             ContextCompat.startForegroundService(ctx, i)
         } catch (e: Exception) {
@@ -149,6 +200,30 @@ class ListenAlarmReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             ListenLog(ctx).add("alarm fired, but Android wouldn't start the listening service: $e")
             ListenScheduler.schedule(ctx)
+        }
+    }
+}
+
+/** Alarms are lost when the phone restarts (and may be when the app is updated), so set
+ *  the next listening window again. On MIUI this only runs with Autostart on. */
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, intent: Intent) {
+        val why = when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED -> "phone restart"
+            Intent.ACTION_MY_PACKAGE_REPLACED -> "app update"
+            else -> return
+        }
+        val log = ListenLog(ctx)
+        try {
+            val w = ListenScheduler.schedule(ctx)
+            log.add(
+                "re-armed after $why: " + (w?.let {
+                    "next listening ${ListenScheduler.fmt(it.start.toInstant().toEpochMilli())} to " +
+                        "${ListenScheduler.fmt(it.end.toInstant().toEpochMilli())} (the watch's sync at ${it.label})"
+                } ?: "nothing planned (test is off)")
+            )
+        } catch (e: Exception) {
+            log.add("couldn't re-arm after $why: $e")
         }
     }
 }

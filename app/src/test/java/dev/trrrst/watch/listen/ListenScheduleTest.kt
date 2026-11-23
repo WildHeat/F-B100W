@@ -78,4 +78,18 @@ class ListenScheduleTest {
         assertEquals(at(2026, 3, 29, 8, 0), w.syncAt)
         assertEquals(1, w.syncAt.offset.totalSeconds / 3600)
     }
+
+    @Test fun wakeTestStartsInThreeMinutesForFive() {
+        val w = ListenSchedule.wakeTest(ZonedDateTime.of(2026, 11, 21, 14, 0, 12, 345_000_000, london))
+        assertEquals(at(2026, 11, 21, 14, 3, 12), w.start)
+        assertEquals(w.start, w.syncAt)
+        assertEquals(at(2026, 11, 21, 14, 8, 12), w.end)
+        assertEquals("wake-up test", w.label)
+    }
+
+    @Test fun wakeTestCrossesMidnight() {
+        val w = ListenSchedule.wakeTest(at(2026, 11, 21, 23, 58))
+        assertEquals(at(2026, 11, 22, 0, 1), w.start)
+        assertEquals(at(2026, 11, 22, 0, 6), w.end)
+    }
 }
