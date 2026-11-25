@@ -63,31 +63,30 @@ class ProtocolTest {
     }
 
     @Test
-    fun bleSettingsPreserveUnrelatedBytes() {
-        val initial = Protocol.BleSettings(hex("110f0f0f0600500004000100001e03"))
-        val disabled = initial.withAutoSync(hour = 6, minute = 45, enabled = false)
-        assertEquals(0x86, disabled[12].toInt() and 0xFF)
-        assertEquals(45, disabled[13].toInt())
-        assertEquals(10, initial.withPeriod(10)[14].toInt())
-        assertArrayEquals(initial.raw, initial.withAutoSync(0, 30, enabled = true))
+    fun autoSyncOnIsWholeByteZero() {
+        // Read back from the user's F-B100W 2026-11-22 23:18 after setting "00:30": the
+        // watch then called at :30:30 (reason 3) on 23 Nov.
+        val on = Protocol.BleSettings(hex("110a0a040600500004000100001e03"))
+        assertEquals(true, on.autoSyncEnabled)
+        // Read from the same watch before (the old app's "on at 08:00"): it never called.
+        val old = Protocol.BleSettings(hex("110a0a040600500004000100080003"))
+        assertEquals(false, old.autoSyncEnabled)
+        // A fresh watch (2026-11-17).
+        assertEquals(false, Protocol.BleSettings(hex("110a0a040600500004000100ffff03")).autoSyncEnabled)
+        assertEquals(false, Protocol.BleSettings(hex("110a0a040600500004000100801e03")).autoSyncEnabled)
     }
 
     @Test
-    fun freshWatchHasNoAutoSyncTime() {
-        // Inferred from the user's F-B100W (2026-11-17): enabling auto-sync on a fresh watch
-        // sent 110a0a0406005000040001007fff03, i.e. the stored bytes 12/13 were FF FF and only
-        // the "disabled" bit got cleared -> hour 127 / minute 255, which the watch rejected.
+    fun autoSyncWritesOnlyBytes12And13() {
+        val old = Protocol.BleSettings(hex("110a0a040600500004000100080003"))
+        assertArrayEquals(hex("110a0a040600500004000100001e03"), old.withAutoSync(true))
+        assertArrayEquals(hex("110a0a040600500004000100801e03"), old.withAutoSync(false))
         val fresh = Protocol.BleSettings(hex("110a0a040600500004000100ffff03"))
-        assertEquals(false, fresh.autoSyncEnabled)
-        assertEquals(false, fresh.hasAutoSyncTime)
-        assertThrows(IllegalArgumentException::class.java) {
-            fresh.withAutoSync(fresh.autoSyncHour, fresh.autoSyncMinute, enabled = true)
-        }
-        val on = fresh.withAutoSync(8, 0, enabled = true)
-        assertEquals(8, on[12].toInt())
-        assertEquals(0, on[13].toInt())
-        assertEquals(true, Protocol.BleSettings(on).hasAutoSyncTime)
-        assertEquals(true, Protocol.BleSettings(on).autoSyncEnabled)
+        assertArrayEquals(hex("110a0a040600500004000100001e03"), fresh.withAutoSync(true))
+        // Switching on a watch that's already on changes nothing.
+        val on = Protocol.BleSettings(hex("110f0f0f0600500004000100001e03"))
+        assertArrayEquals(on.raw, on.withAutoSync(true))
+        assertEquals(10, on.withPeriod(10)[14].toInt())
     }
 
     @Test

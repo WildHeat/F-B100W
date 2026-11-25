@@ -321,11 +321,11 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun saveAutoSync(hour: Int, minute: Int, enabled: Boolean) {
+    fun saveAutoSync(enabled: Boolean) {
         viewModelScope.launch {
             op("auto-sync") {
                 val current = Protocol.BleSettings(ble.read(Protocol.OP_BLE_SETTINGS))
-                ble.write(current.withAutoSync(hour, minute, enabled))
+                ble.write(current.withAutoSync(enabled))
                 bleSettings = Protocol.BleSettings(ble.read(Protocol.OP_BLE_SETTINGS))
                     .also { learnAutoSync(it) }
                 log("auto-sync saved")

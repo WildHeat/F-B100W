@@ -9,7 +9,15 @@ object PhoneSetup {
         val batteryOptimised: Boolean?,
         val exactAlarms: Boolean,
         val isXiaomi: Boolean,
+        /** Null if unknown. */
+        val bluetoothOn: Boolean? = null,
     )
+
+    fun bluetoothLine(s: State): String = when (s.bluetoothOn) {
+        true -> "Bluetooth: on. Good."
+        false -> "Bluetooth: off. The watch can only reach the phone while Bluetooth is on."
+        null -> "Bluetooth: couldn't check."
+    }
 
     fun batteryLine(s: State): String = when (s.batteryOptimised) {
         true -> "Battery optimisation: on. Android may delay or skip the listening times."

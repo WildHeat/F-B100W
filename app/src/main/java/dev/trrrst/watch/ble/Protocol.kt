@@ -167,25 +167,33 @@ object Protocol {
         }
     }
 
-    // ---- 0x11 BLE settings (14 bytes after opcode); byte12: hour + bit7 = disabled; byte13: min; byte14: conn period
+    // ---- 0x11 BLE settings (14 bytes after opcode); byte12: auto time adjustment flag;
+    // byte13: minutes past the hour; byte14: connection period.
+    // Byte 12 is a whole-byte flag, 00 = on, 80 = off (izivkov/gshock_api
+    // time_adjustment_io.py). Confirmed on the user's F-B100W 2026-11-23: with 00 1E the
+    // watch calls at about :30:30 past 00/06/12/18 (reason "automatic sync"); with 08 00
+    // (the old hour-and-minute reading's "on at 08:00") it never called. Only 30 minutes
+    // has been tested, so the app always writes 1E.
     data class BleSettings(val raw: ByteArray) {
-        val autoSyncEnabled get() = raw[12].toInt() and 0x80 == 0
-        val autoSyncHour get() = raw[12].toInt() and 0x7F
-        val autoSyncMinute get() = raw[13].toInt() and 0xFF
+        val autoSyncEnabled get() = raw[12].toInt() and 0xFF == AUTO_SYNC_ON
         val connectingPeriod get() = raw[14].toInt() and 0xFF
-        /** A fresh watch stores FF FF ("no time set"); hour 127 / minute 255 is not a real time. */
-        val hasAutoSyncTime get() = autoSyncHour in 0..23 && autoSyncMinute in 0..59
 
-        fun withAutoSync(hour: Int, minute: Int, enabled: Boolean): ByteArray {
-            require(hour in 0..23 && minute in 0..59) { "invalid auto-sync time $hour:$minute" }
+        /** Switch auto time adjustment on (00 1E) or off (80 1E); nothing else changes. */
+        fun withAutoSync(enabled: Boolean): ByteArray {
             val b = raw.copyOf()
-            b[12] = ((hour and 0x7F) or (if (enabled) 0 else 0x80)).toByte()
-            b[13] = minute.toByte()
+            b[12] = (if (enabled) AUTO_SYNC_ON else AUTO_SYNC_OFF).toByte()
+            b[13] = AUTO_SYNC_MINUTES.toByte()
             return b
         }
 
         fun withPeriod(minutes: Int): ByteArray {
             val b = raw.copyOf(); b[14] = minutes.toByte(); return b
+        }
+        companion object {
+            const val AUTO_SYNC_ON = 0x00
+            const val AUTO_SYNC_OFF = 0x80
+            /** Minutes past 00/06/12/18 at which the watch calls; the only tested value. */
+            const val AUTO_SYNC_MINUTES = 30
         }
     }
 

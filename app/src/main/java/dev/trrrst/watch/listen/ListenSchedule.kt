@@ -8,9 +8,9 @@ import java.time.format.DateTimeFormatter
 /** When the background listening test (PLAN Phase 3, step 1) runs. Pure, unit-tested.
  *
  *  Casio's manual (module 3589, "Auto Time Correction") says the watch connects to the
- *  phone four times a day at around [MANUAL_TIMES]. The app also knows an "auto-sync
- *  time" from the watch's BLE settings whose meaning isn't confirmed, so the test
- *  listens around both: from [LEAD] before each time until [AFTER] after it. */
+ *  phone four times a day at around [MANUAL_TIMES]; with auto time sync on, the user's
+ *  watch called at about :30:30 (2026-11-23). The phone listens from [LEAD] before each
+ *  time until [AFTER] after it. */
 object ListenSchedule {
     val LEAD: Duration = Duration.ofMinutes(10)
     val AFTER: Duration = Duration.ofMinutes(20)
@@ -59,9 +59,18 @@ object ListenSchedule {
         return Window(start, start, start.plus(WAKE_TEST_LENGTH), WAKE_TEST_LABEL)
     }
 
-    /** The times to listen around: the manual's four, plus the watch's own setting if on. */
-    fun times(autoSyncOn: Boolean?, hour: Int, minute: Int): List<LocalTime> =
-        if (autoSyncOn == true && hour in 0..23 && minute in 0..59)
-            (MANUAL_TIMES + LocalTime.of(hour, minute)).distinct().sorted()
-        else MANUAL_TIMES
+    /** A saved "done until" further ahead than this is ignored (e.g. the phone's clock
+     *  was set back), so it can never block listening for long. */
+    val DONE_UNTIL_MAX_AHEAD: Duration = Duration.ofDays(1)
+
+    /** When to plan the next window from (ms): now, but never inside a window that has
+     *  already run. [doneUntil] is the end of the last window that finished (0 = none).
+     *
+     *  On 25 Nov the watch's 12:30 call ended that window at 12:30:40; opening the app at
+     *  12:42 planned from "now", restarted the 12:30 window until 12:50, and the wake-up
+     *  test set at 12:43 was ignored as "already listening". */
+    fun planFrom(now: Long, notBefore: Long, doneUntil: Long): Long {
+        val done = if (doneUntil - now > DONE_UNTIL_MAX_AHEAD.toMillis()) 0L else doneUntil
+        return maxOf(now, notBefore, done)
+    }
 }

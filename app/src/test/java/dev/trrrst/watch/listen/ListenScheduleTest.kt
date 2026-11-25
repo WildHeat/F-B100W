@@ -57,19 +57,12 @@ class ListenScheduleTest {
     }
 
     @Test fun nearbyTimesAreMerged() {
-        val times = ListenSchedule.times(true, 6, 45)
+        val times = manual + LocalTime.of(6, 45)
         val w = ListenSchedule.next(at(2026, 11, 18, 2, 0), times)
         assertEquals(at(2026, 11, 18, 6, 20), w.start)
         assertEquals(at(2026, 11, 18, 6, 30), w.syncAt)
         assertEquals(at(2026, 11, 18, 7, 5), w.end)
         assertEquals("06:30, 06:45", w.label)
-    }
-
-    @Test fun watchSettingAddedOnlyWhenOn() {
-        assertEquals(5, ListenSchedule.times(true, 8, 0).size)
-        assertEquals(manual, ListenSchedule.times(false, 8, 0))
-        assertEquals(manual, ListenSchedule.times(null, 8, 0))
-        assertEquals(4, ListenSchedule.times(true, 6, 30).size)
     }
 
     @Test fun summerTimeStartKeepsWallClock() {
@@ -91,5 +84,36 @@ class ListenScheduleTest {
         val w = ListenSchedule.wakeTest(at(2026, 11, 21, 23, 58))
         assertEquals(at(2026, 11, 22, 0, 1), w.start)
         assertEquals(at(2026, 11, 22, 0, 6), w.end)
+    }
+
+    private fun ms(z: ZonedDateTime) = z.toInstant().toEpochMilli()
+    private fun zoned(t: Long) = java.time.Instant.ofEpochMilli(t).atZone(london)
+
+    @Test fun finishedWindowIsNotRestarted() {
+        // 25 Nov: the 12:30 window ended at 12:30:40 (watch called), saved as done until
+        // 12:50. Opening the app at 12:42 must plan 18:20, not restart 12:30.
+        val now = ms(at(2026, 11, 25, 12, 42, 55))
+        val from = ListenSchedule.planFrom(now, 0L, ms(at(2026, 11, 25, 12, 50)))
+        val w = ListenSchedule.next(zoned(from), manual)
+        assertEquals(at(2026, 11, 25, 18, 20), w.start)
+        assertEquals(at(2026, 11, 25, 18, 30), w.syncAt)
+    }
+
+    @Test fun oldDoneUntilHasNoEffect() {
+        val now = ms(at(2026, 11, 25, 12, 25))
+        assertEquals(now, ListenSchedule.planFrom(now, 0L, ms(at(2026, 11, 25, 6, 50))))
+        assertEquals(now, ListenSchedule.planFrom(now, 0L, 0L))
+    }
+
+    @Test fun notBeforeStillWins() {
+        val now = ms(at(2026, 11, 25, 12, 30, 40))
+        val end = ms(at(2026, 11, 25, 12, 50))
+        assertEquals(end, ListenSchedule.planFrom(now, end, 0L))
+    }
+
+    @Test fun doneUntilFarAheadIsIgnored() {
+        // Clock set back by two days: a saved end that far ahead must not block listening.
+        val now = ms(at(2026, 11, 25, 12, 25))
+        assertEquals(now, ListenSchedule.planFrom(now, 0L, ms(at(2026, 11, 27, 12, 50))))
     }
 }
