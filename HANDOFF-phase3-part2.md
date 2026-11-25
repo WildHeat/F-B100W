@@ -84,7 +84,7 @@ Branch `feat/reliable-wakeup`. It doesn't touch the watch.
 
 ## After that: separate decisions (plan first, ask)
 
-- **Phase 3 proper:** when the watch calls (reason 3, or 4 for D), run the normal sync (home city + time, then steps) for the saved watch only, never asking. It must write the time within about 7 s. Then a quiet notification ("Watch synced at 06:30 · 6,412 steps"). Then decide whether the listening windows become the real feature: logs private, Settings text, removing the test UI.
+- **Phase 3 proper** (planned 2026-11-25 in PLAN.md Phase 3, waiting for the user's approval): when the watch calls (reason 3, or 4 for D), run the normal sync (home city + time, then steps) for the saved watch only, never asking. It must write the time within about 7 s. Then a quiet notification ("Watch synced at 06:30 · 6,412 steps"). Then decide whether the listening windows become the real feature: logs private, Settings text, removing the test UI.
 - **Pairing:** test without the bond (unpair on the phone, and run the watch's clear-pairing steps). Note that the watch clear resets app info to `FF`, and the app re-registers on the next connect. If the watch is fine without the bond, remove `PairTest` and restore the "no pairing" rule.
 - **Still untested from Phase 2:** *Cancel* in the "This isn't your saved watch" dialog, and Connect with Bluetooth off.
 
