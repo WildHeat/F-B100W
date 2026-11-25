@@ -1,6 +1,5 @@
 package dev.trrrst.watch.ui
 
-import android.app.TimePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -57,9 +56,6 @@ fun SettingsScreen(vm: WatchViewModel) {
 
     var period by remember(bs) { mutableStateOf(bs.connectingPeriod) }
     var autoOn by remember(bs) { mutableStateOf(bs.autoSyncEnabled) }
-    // A fresh watch has no auto-sync time (FF FF); offer 08:00 instead of 127:255.
-    var autoH by remember(bs) { mutableStateOf(if (bs.hasAutoSyncTime) bs.autoSyncHour else 8) }
-    var autoM by remember(bs) { mutableStateOf(if (bs.hasAutoSyncTime) bs.autoSyncMinute else 0) }
     var goal by remember(prof) { mutableStateOf(prof.stepGoal.toString()) }
     var height by remember(prof) { mutableStateOf(prof.height.toString()) }
     var weight by remember(prof) { mutableStateOf(prof.weight.toString()) }
@@ -124,20 +120,11 @@ fun SettingsScreen(vm: WatchViewModel) {
             }
         }
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Auto time sync")
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = {
-                    TimePickerDialog(ctx, { _, h, m ->
-                        autoH = h; autoM = m
-                        // Already on: a new time must reach the watch, not just the screen.
-                        if (autoOn) vm.saveAutoSync(h, m, true)
-                    }, autoH, autoM, true).show()
-                }) { Mono("%02d:%02d".format(autoH, autoM)) }
-                Switch(checked = autoOn, onCheckedChange = {
-                    autoOn = it; vm.saveAutoSync(autoH, autoM, it)
-                })
-            }
+            SettingSwitch("Auto time sync", autoOn) { autoOn = it; vm.saveAutoSync(it) }
+            Text(
+                "The watch asks this phone for the time at about 00:30, 06:30, 12:30 and 18:30.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         item { Text("Profile & goal", style = MaterialTheme.typography.titleSmall) }
@@ -218,11 +205,10 @@ private fun ListenTestSection(vm: WatchViewModel) {
                 Switch(checked = st.testOn, onCheckedChange = { vm.setListenTest(it) })
             }
             Text(
-                "Test only. Around the watch's sync times (about 00:30, 06:30, 12:30 and 18:30 " +
-                    "according to Casio's manual, plus the auto time sync time if it's on), the phone " +
-                    "listens for your watch for 30 minutes, connects once to read its address, and " +
-                    "notes what happened. Nothing on the watch is changed. The watch may show Err " +
-                    "afterwards, which is harmless.",
+                "Test only. Around the watch's sync times (about 00:30, 06:30, 12:30 and 18:30), " +
+                    "the phone waits 30 minutes for your watch to call, connects once to note why it " +
+                    "called, and logs what happened. Nothing on the watch is changed, so the watch " +
+                    "shows Err or gives up afterwards, which is harmless.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(listenStatusText(st, vm.savedWatch != null), style = MaterialTheme.typography.bodyMedium)
@@ -273,6 +259,7 @@ private fun PhoneSetupCard(vm: WatchViewModel) {
             PhoneSetup.steps(s).forEachIndexed { i, step ->
                 Text("${i + 1}. $step", style = MaterialTheme.typography.bodySmall)
             }
+            Text(PhoneSetup.bluetoothLine(s), style = MaterialTheme.typography.bodyMedium)
             Text(PhoneSetup.batteryLine(s), style = MaterialTheme.typography.bodyMedium)
             Text(PhoneSetup.alarmLine(s), style = MaterialTheme.typography.bodyMedium)
             if (s.isXiaomi) Text("Autostart: the app can't check this, please look yourself.",
@@ -308,8 +295,10 @@ private fun listenStatusText(st: ListenScheduler.Status, hasSavedWatch: Boolean)
             "Next listening: $day ${it.start.format(fmt)} to ${it.end.format(fmt)} (watch sync at ${it.label})."
         } ?: "On."
     }
-    return if (hasSavedWatch) main
-    else "$main No watch saved yet: connect once so the test can try connecting to it."
+    val autoOff = if (st.testOn && st.autoSyncOn == false)
+        " The watch's Auto time sync is off, so it won't call: switch it on below (connect first)." else ""
+    return if (hasSavedWatch) main + autoOff
+    else "$main No watch saved yet: connect once so the test can connect to it."
 }
 
 @Composable

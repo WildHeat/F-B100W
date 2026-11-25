@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -183,59 +182,6 @@ class BleManager(private val context: Context) {
                 _statusLine.value = "watch not found"
             }
         }
-    }
-
-    /** Background listening test (PLAN Phase 3, step 1): report every advert from an
-     *  F-B100W (by name) or from [savedAddress], until the returned function is called.
-     *  Unlike [scan], this never hands a watch to the app's connect flow and doesn't
-     *  change [state]. Filtered on purpose: Android pauses unfiltered scans while the
-     *  screen is off. [fast] = SCAN_MODE_LOW_LATENCY (someone is waiting: Listen now,
-     *  wake-up test); otherwise BALANCED, which uses less battery for the long scheduled
-     *  windows. Returns null (after calling [onFailed]) if it can't start. */
-    fun listen(
-        savedAddress: String?,
-        fast: Boolean,
-        onResult: (ScanResult) -> Unit,
-        onFailed: (String) -> Unit,
-    ): (() -> Unit)? {
-        val adapter = bluetoothAdapter
-        ScanCheck.problem(
-            hasAdapter = adapter != null,
-            bluetoothOn = runCatching { adapter?.isEnabled == true }.getOrDefault(false),
-            locationOn = locationOn(),
-            sdkInt = Build.VERSION.SDK_INT,
-        )?.let { onFailed(it); return null }
-        val scanner = try {
-            adapter?.bluetoothLeScanner
-        } catch (e: SecurityException) {
-            onFailed(ScanCheck.NOT_ALLOWED); return null
-        } ?: run { onFailed(ScanCheck.BLUETOOTH_OFF); return null }
-        val filters = mutableListOf(ScanFilter.Builder().setDeviceName(WATCH_NAME).build())
-        savedAddress?.let { address ->
-            runCatching { ScanFilter.Builder().setDeviceAddress(address.trim().uppercase()).build() }
-                .onSuccess { filters += it }
-        }
-        val cb = object : ScanCallback() {
-            override fun onScanResult(type: Int, r: ScanResult) = onResult(r)
-            override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(onResult)
-            override fun onScanFailed(code: Int) = onFailed("scan failed, code=$code")
-        }
-        try {
-            scanner.startScan(
-                filters,
-                ScanSettings.Builder()
-                    .setScanMode(if (fast) ScanSettings.SCAN_MODE_LOW_LATENCY else ScanSettings.SCAN_MODE_BALANCED)
-                    // Report a watch from its first advert (as izivkov's Smart Sync does).
-                    .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
-                    .build(),
-                cb
-            )
-        } catch (e: SecurityException) {
-            onFailed(ScanCheck.NOT_ALLOWED); return null
-        } catch (e: IllegalStateException) {
-            onFailed(ScanCheck.BLUETOOTH_OFF); return null
-        }
-        return { stopScanQuietly(scanner, cb) }
     }
 
     /** Counts [connect] calls. A caller that remembers its number can tell whether a

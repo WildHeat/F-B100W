@@ -49,6 +49,12 @@ class PhoneSetupTest {
         assertTrue(all.none { it.contains("Exception") || it.contains("0x") })
     }
 
+    @Test fun bluetoothLine() {
+        assertEquals("Bluetooth: on. Good.", PhoneSetup.bluetoothLine(state(opt = false).copy(bluetoothOn = true)))
+        assertTrue(PhoneSetup.bluetoothLine(state(opt = false).copy(bluetoothOn = false)).contains("only reach the phone"))
+        assertTrue(PhoneSetup.bluetoothLine(state(opt = false)).contains("couldn't check"))
+    }
+
     @Test fun recognisesXiaomiBrands() {
         assertTrue(PhoneSetup.isXiaomi("Xiaomi", "Xiaomi"))
         assertTrue(PhoneSetup.isXiaomi("Xiaomi", "Redmi"))

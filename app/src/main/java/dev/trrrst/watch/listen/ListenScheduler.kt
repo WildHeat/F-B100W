@@ -15,32 +15,27 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 /** Switches the listening test on and off and sets its alarms (PLAN Phase 3, step 1).
- *  It listens around the manual's four daily sync times, plus the watch's own
- *  auto-sync setting, which is kept on the phone (prefs `watch`) whenever the app
- *  reads the watch's BLE settings, because the app is closed when it matters. */
+ *  It listens around the watch's four daily sync times. Whether the watch's auto time
+ *  sync is on is kept on the phone (prefs `watch`) whenever the app reads the watch's
+ *  BLE settings, so Settings can warn when it's off. */
 object ListenScheduler {
     private const val PREFS = "watch"
     private const val KEY_TEST = "listenTest"
     private const val KEY_AUTO_ON = "autoSyncOn"
-    private const val KEY_HOUR = "autoSyncHour"
-    private const val KEY_MINUTE = "autoSyncMinute"
+    /** No longer used (the auto-sync "time" was a misreading); removed when next seen. */
+    private val OLD_KEYS = listOf("autoSyncHour", "autoSyncMinute")
     private const val KEY_NEXT = "listenNextStart"
+    /** End (ms) of the last listening window that finished: never restart it. */
+    private const val KEY_DONE_UNTIL = "listenDoneUntil"
 
     const val EXTRA_START = "start"
     const val EXTRA_SYNC_AT = "syncAt"
     const val EXTRA_END = "end"
     const val EXTRA_LABEL = "label"
-    /** true: SCAN_MODE_LOW_LATENCY (Listen now, wake-up test); false: BALANCED (daily windows). */
-    const val EXTRA_FAST_SCAN = "fastScan"
 
     /** PendingIntent request codes: the daily window and the wake-up test don't replace each other. */
     private const val REQ_DAILY = 0
     private const val REQ_WAKE_TEST = 1
-
-    /** Scan speed for the daily windows. Temporarily fast (user-approved 2026-11-22): on
-     *  22 Nov the balanced scan heard nothing in all five windows, so one night with the
-     *  fast scan rules out "the scan missed a short call". Set back to false afterwards. */
-    private const val DAILY_FAST_SCAN = true
 
     /** "Listen now": how long, for pressing D on the watch by hand. */
     const val LISTEN_NOW_MS = 5 * 60_000L
@@ -49,25 +44,22 @@ object ListenScheduler {
     data class Status(
         val testOn: Boolean,
         val autoSyncOn: Boolean?,
-        val hour: Int,
-        val minute: Int,
         val next: ListenSchedule.Window?,
     )
 
     private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** [notBefore] (ms): plan from then instead of now, so a window that just ended
-     *  (or ended early) isn't picked again. */
+     *  (or ended early) isn't picked again. The end of the last finished window is also
+     *  saved ([KEY_DONE_UNTIL]), so later calls (e.g. opening the app) don't restart it. */
     fun status(ctx: Context, notBefore: Long = 0L): Status {
         val p = prefs(ctx)
         val testOn = p.getBoolean(KEY_TEST, false)
         val autoOn = if (p.contains(KEY_AUTO_ON)) p.getBoolean(KEY_AUTO_ON, false) else null
-        val h = p.getInt(KEY_HOUR, 8)
-        val m = p.getInt(KEY_MINUTE, 0)
-        val from = maxOf(System.currentTimeMillis(), notBefore)
+        val from = ListenSchedule.planFrom(System.currentTimeMillis(), notBefore, p.getLong(KEY_DONE_UNTIL, 0L))
         val fromTime = Instant.ofEpochMilli(from).atZone(ZoneId.systemDefault())
-        val next = if (testOn) ListenSchedule.next(fromTime, ListenSchedule.times(autoOn, h, m)) else null
-        return Status(testOn, autoOn, h, m, next)
+        val next = if (testOn) ListenSchedule.next(fromTime, ListenSchedule.MANUAL_TIMES) else null
+        return Status(testOn, autoOn, next)
     }
 
     fun setTestOn(ctx: Context, on: Boolean) {
@@ -78,14 +70,16 @@ object ListenScheduler {
 
     /** Keep the watch's auto-sync setting (just read from the watch) on the phone. */
     fun rememberAutoSync(ctx: Context, bs: Protocol.BleSettings) {
-        val on = bs.autoSyncEnabled && bs.hasAutoSyncTime
-        val h = if (bs.hasAutoSyncTime) bs.autoSyncHour else 8
-        val m = if (bs.hasAutoSyncTime) bs.autoSyncMinute else 0
-        val st = status(ctx)
-        if (st.autoSyncOn == on && st.hour == h && st.minute == m) return
-        prefs(ctx).edit().putBoolean(KEY_AUTO_ON, on).putInt(KEY_HOUR, h).putInt(KEY_MINUTE, m).apply()
-        ListenLog(ctx).add("watch auto time sync: ${if (on) "on at %02d:%02d".format(h, m) else "off"}")
-        schedule(ctx)
+        val on = bs.autoSyncEnabled
+        val p = prefs(ctx)
+        if (OLD_KEYS.any { p.contains(it) }) {
+            val e = p.edit()
+            OLD_KEYS.forEach { e.remove(it) }
+            e.apply()
+        }
+        if (status(ctx).autoSyncOn == on) return
+        p.edit().putBoolean(KEY_AUTO_ON, on).apply()
+        ListenLog(ctx).add("watch auto time sync: ${if (on) "on (calls at about :30 past 00, 06, 12, 18)" else "off"}")
     }
 
     /** Set (or cancel) the alarm for the next listening window. Safe to call often. */
@@ -93,6 +87,7 @@ object ListenScheduler {
         val app = ctx.applicationContext
         val am = app.getSystemService(AlarmManager::class.java)
         val p = prefs(app)
+        if (notBefore > p.getLong(KEY_DONE_UNTIL, 0L)) p.edit().putLong(KEY_DONE_UNTIL, notBefore).apply()
         val st = status(app, notBefore)
         val w = st.next
         if (w == null) {
@@ -104,7 +99,7 @@ object ListenScheduler {
             return null
         }
         val at = w.start.toInstant().toEpochMilli()
-        val exact = setAlarm(app, at, alarmIntent(app, w, REQ_DAILY, "the watch's sync at ${w.label}", fastScan = DAILY_FAST_SCAN))
+        val exact = setAlarm(app, at, alarmIntent(app, w, REQ_DAILY, "the watch's sync at ${w.label}"))
         if (p.getLong(KEY_NEXT, 0L) != at) {
             p.edit().putLong(KEY_NEXT, at).apply()
             ListenLog(app).add(
@@ -121,7 +116,7 @@ object ListenScheduler {
         val app = ctx.applicationContext
         val w = ListenSchedule.wakeTest(ZonedDateTime.now())
         val at = w.start.toInstant().toEpochMilli()
-        val exact = setAlarm(app, at, alarmIntent(app, w, REQ_WAKE_TEST, ListenSchedule.WAKE_TEST_LABEL, fastScan = true))
+        val exact = setAlarm(app, at, alarmIntent(app, w, REQ_WAKE_TEST, ListenSchedule.WAKE_TEST_LABEL))
         ListenLog(app).add(
             "wake-up test set: listening ${fmt(w.start)} to ${fmt(w.end)}" +
                 if (exact) " (alarm-clock alarm)" else " (inexact alarm: exact ones aren't allowed on this phone)"
@@ -154,7 +149,7 @@ object ListenScheduler {
     }
 
     private fun alarmIntent(
-        ctx: Context, w: ListenSchedule.Window?, requestCode: Int, label: String = "", fastScan: Boolean = false,
+        ctx: Context, w: ListenSchedule.Window?, requestCode: Int, label: String = "",
     ): PendingIntent {
         val i = Intent(ctx, ListenAlarmReceiver::class.java).setAction("dev.trrrst.watch.LISTEN")
         if (w != null) {
@@ -162,7 +157,6 @@ object ListenScheduler {
             i.putExtra(EXTRA_SYNC_AT, w.syncAt.toInstant().toEpochMilli())
             i.putExtra(EXTRA_END, w.end.toInstant().toEpochMilli())
             i.putExtra(EXTRA_LABEL, label)
-            i.putExtra(EXTRA_FAST_SCAN, fastScan)
         }
         return PendingIntent.getBroadcast(
             ctx, requestCode, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -178,7 +172,6 @@ object ListenScheduler {
             .putExtra(EXTRA_SYNC_AT, now)
             .putExtra(EXTRA_END, now + LISTEN_NOW_MS)
             .putExtra(EXTRA_LABEL, "Listen now (press D on the watch)")
-            .putExtra(EXTRA_FAST_SCAN, true)
         try {
             ContextCompat.startForegroundService(ctx, i)
         } catch (e: Exception) {

@@ -18,6 +18,9 @@ object PhoneSettings {
         }.getOrNull(),
         exactAlarms = ListenScheduler.exactAlarmsAllowed(ctx),
         isXiaomi = PhoneSetup.isXiaomi(Build.MANUFACTURER, Build.BRAND),
+        bluetoothOn = runCatching {
+            ctx.getSystemService(android.bluetooth.BluetoothManager::class.java).adapter?.isEnabled
+        }.getOrNull(),
     )
 
     /** Android's list of apps with battery optimisation (find the app, "Don't optimise"). */
